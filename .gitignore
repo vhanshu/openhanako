@@ -59,6 +59,7 @@ node_modules
 .claude/
 .agents/skills/
 *.code-workspace
+.idea
 
 # 项目私有文件
 CLAUDE.md
