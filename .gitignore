@@ -47,6 +47,8 @@ desktop/dist-renderer/
 desktop/native/**/.build/
 vendor/
 inbox/
+/build/electron-v42.3.0-dist
+/dist-sandbox/win-x64
 
 # 运行时 / 依赖
 # ═══════════════════════════════════════════

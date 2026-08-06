@@ -760,6 +760,7 @@ export const PreviewEditor = forwardRef<PreviewEditorHandle, PreviewEditorProps>
       const c = cRef.current;
       const isMd = mode === 'markdown';
       const isCsv = mode === 'csv';
+      let disposed = false;
 
       const extensions = [
         ...(isMd ? [] : [drawSelection()]),
@@ -946,6 +947,30 @@ export const PreviewEditor = forwardRef<PreviewEditorHandle, PreviewEditorProps>
       view.dom.addEventListener('dragleave', onCoverDragLeave, true);
       view.dom.addEventListener('drop', onCoverDrop, true);
       viewRef.current = view;
+      // code 模式：按 language prop 从 @codemirror/language-data 异步加载对应语言的
+      // LanguageSupport，dispatch reconfigure 接入 c.lang compartment。
+      // markdown 模式在 c.lang.of 里同步挂了语法解析器，不走这里。
+      if (!isMd && language) {
+        const langKey = language.toLowerCase();
+        const langDef = languages.find(
+          (l) => l.name.toLowerCase() === langKey || l.alias?.includes(langKey),
+        );
+        if (langDef) {
+          langDef.load()
+            .then((loadedLang) => {
+              if (!disposed && viewRef.current) {
+                viewRef.current.dispatch({
+                  effects: cRef.current.lang.reconfigure(loadedLang),
+                });
+              }
+            })
+            .catch((err) => {
+              if (process.env.NODE_ENV !== 'production') {
+                console.warn('[PreviewEditor] failed to load language:', langKey, err);
+              }
+            });
+        }
+      }
       lastStatsRef.current = null;
       emitStatsIfChanged(view);
       restoreEditorScrollSnapshot(view, initialScrollSnapshotRef.current);
@@ -972,6 +997,7 @@ export const PreviewEditor = forwardRef<PreviewEditorHandle, PreviewEditorProps>
         view.dom.removeEventListener('drop', onCoverDrop, true);
         view.destroy();
         viewRef.current = null;
+        disposed = true;
       };
     }, [editorHostReadySignal, mode, language, readOnly, filePath, remoteContentRef, emitStatsIfChanged, insertMarkdownAttachments]); // eslint-disable-line react-hooks/exhaustive-deps -- 仅在 host 可测量以及 mode/language/readOnly/filePath/remoteContentRef 变化时重建 CodeMirror，content/refs 故意省略以避免销毁重建
 

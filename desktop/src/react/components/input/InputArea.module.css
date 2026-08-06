@@ -1821,6 +1821,28 @@
     vertical-align: middle;
 }
 
+.media-attachment-chip-interactive {
+    cursor: pointer;
+    transition: background-color var(--duration-instant),
+        border-color var(--duration-instant),
+        box-shadow var(--duration-instant);
+}
+
+.media-attachment-chip-interactive:hover {
+    background: var(--overlay-light, rgba(0, 0, 0, 0.04));
+    border-color: var(--accent);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+.media-attachment-chip-interactive:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+.media-attachment-chip-interactive:active {
+    background: var(--overlay-light, rgba(0, 0, 0, 0.06));
+}
+
 .media-attachment-at {
     flex: 0 0 auto;
     color: var(--accent);

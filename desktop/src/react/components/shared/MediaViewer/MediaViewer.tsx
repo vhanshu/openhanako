@@ -4,7 +4,7 @@ import { spring } from '@/ui/motion';
 import { useStore } from '../../../stores';
 import { isMediaKind } from '../../../utils/file-kind';
 import { fileRefVersionToken } from '../../../services/resource-url';
-import { ImageStage } from './ImageStage';
+import { ImageStage, type ImageStageActions } from './ImageStage';
 import { VideoStage } from './VideoStage';
 import styles from './MediaViewer.module.css';
 
@@ -16,19 +16,47 @@ export function MediaViewer() {
   const setMediaViewerCurrent = useStore(s => s.setMediaViewerCurrent);
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const stageWrapRef = useRef<HTMLDivElement>(null);
+  const imageStageRef = useRef<ImageStageActions | null>(null);
   const [chromeVisible, setChromeVisible] = useState(true);
   const idleTimerRef = useRef<number | null>(null);
-  const [viewport, setViewport] = useState({ width: 800, height: 600 });
+  // 初始值同步读 window 尺寸，避免 mount 后第一帧 stageSize 拿不到真实值时 fit scale 算成 1×1
+  // 导致图片贴到 (0,0) / 缩到看不见。stageWrap 实际尺寸由后续 ResizeObserver 覆盖。
+  const [viewport, setViewport] = useState(() => ({
+    width: typeof window !== 'undefined' ? window.innerWidth : 1,
+    height: typeof window !== 'undefined' ? window.innerHeight : 1,
+  }));
   const [zoomCmd, setZoomCmd] = useState({ in: 0, out: 0, reset: 0 });
+  /** 镜像 ImageStage 的 scale，让顶层工具栏能决定“1:1 / fit”图标。 */
+  const [imageScale, setImageScale] = useState<number>(1);
 
   // 只关心 open/close 切换，不关心 state 内容变化，提成布尔以满足 exhaustive-deps
   const isOpen = !!state;
 
-  // 尺寸追踪
+  // 尺寸追踪：用 stageWrap 实际尺寸（不是 window），避免顶栏 / captionBar 占用上下空间后
+  // fit scale 算出“图片超出可视区”的结果。
   useEffect(() => {
     if (!isOpen) return;
-    const update = () => setViewport({ width: window.innerWidth, height: window.innerHeight });
+    const stageWrap = stageWrapRef.current;
+    if (!stageWrap) return;
+    const update = () => {
+      const rect = stageWrap.getBoundingClientRect();
+      // width/height 可能为 0（该节点刚 mount 还没布局）。保留上次的值，不滥用默认值。
+      if (rect.width > 0 && rect.height > 0) {
+        setViewport({ width: rect.width, height: rect.height });
+      }
+    };
     update();
+    // jsdom 测试环境不提供 ResizeObserver，仅用 window.resize 兜底。
+    if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver(update);
+      ro.observe(stageWrap);
+      window.addEventListener('resize', update);
+      return () => {
+        ro.disconnect();
+        window.removeEventListener('resize', update);
+      };
+    }
     window.addEventListener('resize', update);
     return () => window.removeEventListener('resize', update);
   }, [isOpen]);
@@ -115,15 +143,9 @@ export function MediaViewer() {
   const prev = canPrev ? state.files[currentIndex - 1] : undefined;
   const next = canNext ? state.files[currentIndex + 1] : undefined;
   const multi = state.files.length > 1;
+  const isActualSize = Math.abs(imageScale - 1) < 0.01;
 
-  const onOverlayClick = (e: React.MouseEvent) => {
-    // 只响应遮罩本身的点击（不拦截内部冒泡）
-    if (e.target === e.currentTarget) closeMediaViewer();
-  };
-
-  const onStageWrapClick = (e: React.MouseEvent) => {
-    if (e.target === e.currentTarget) closeMediaViewer();
-  };
+  // 仅 X 按钮 / ESC 键可关闭，点空白不再响应。
 
   return (
     <motion.div
@@ -133,7 +155,6 @@ export function MediaViewer() {
       aria-modal="true"
       aria-label={t('mediaViewer.ariaLabel')}
       data-testid="media-viewer-overlay"
-      onClick={onOverlayClick}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={spring.paperSnap}
@@ -145,12 +166,36 @@ export function MediaViewer() {
             {currentIndex + 1} / {state.files.length}
           </span>
         )}
-        <button
-          className={styles.closeBtn}
-          data-testid="media-viewer-close"
-          aria-label={t('mediaViewer.close')}
-          onClick={(e) => { e.stopPropagation(); closeMediaViewer(); }}
-        >×</button>
+        <div className={styles.topbarActions}>
+          {current.kind !== 'video' && (
+            <>
+              <button
+                className={styles.iconBtn}
+                data-testid="media-viewer-actual-size"
+                aria-label={isActualSize ? t('mediaViewer.fit') : t('mediaViewer.actualSize')}
+                title={isActualSize ? t('mediaViewer.fit') : t('mediaViewer.actualSize')}
+                onClick={(e) => { e.stopPropagation(); imageStageRef.current?.toggleActualSize(); }}
+              >
+                {isActualSize ? <FitToScreenIcon /> : <ActualSizeIcon />}
+              </button>
+              <button
+                className={styles.iconBtn}
+                data-testid="media-viewer-rotate"
+                aria-label={t('mediaViewer.rotateCw')}
+                title={t('mediaViewer.rotateCw')}
+                onClick={(e) => { e.stopPropagation(); imageStageRef.current?.rotateCw(); }}
+              >
+                <RotateCwIcon />
+              </button>
+            </>
+          )}
+          <button
+            className={styles.closeBtn}
+            data-testid="media-viewer-close"
+            aria-label={t('mediaViewer.close')}
+            onClick={(e) => { e.stopPropagation(); closeMediaViewer(); }}
+          >×</button>
+        </div>
       </div>
 
       {/* 左右箭头（仅多张时） */}
@@ -175,18 +220,20 @@ export function MediaViewer() {
 
       {/* Stage */}
       <div
+        ref={stageWrapRef}
         className={styles.stageWrap}
         data-testid="media-viewer-stage-wrap"
-        onClick={onStageWrapClick}
       >
         {current.kind === 'video' ? (
           <VideoStage file={current} viewport={viewport} />
         ) : (
           <ImageStage
+            ref={imageStageRef}
             file={current}
             viewport={viewport}
             neighbors={{ prev, next }}
             zoomCmd={zoomCmd}
+            onTransformChange={setImageScale}
             key={`${current.id}:${fileRefVersionToken(current) || ''}`}
           />
         )}
@@ -199,5 +246,36 @@ export function MediaViewer() {
         <span className={styles.name} data-testid="media-viewer-name">{current.name}</span>
       </div>
     </motion.div>
+  );
+}
+
+function RotateCwIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <polyline points="23 4 23 10 17 10" />
+      <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+    </svg>
+  );
+}
+
+function ActualSizeIcon() {
+  // 1:1 原始大小：直角矩形 + 数字 1:1
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3.5" y="3.5" width="17" height="17" rx="2" />
+      <text x="12" y="14.5" textAnchor="middle" fontSize="7.5" fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace" fontWeight="600" stroke="none" fill="currentColor">1:1</text>
+    </svg>
+  );
+}
+
+function FitToScreenIcon() {
+  // 适应屏幕：四角括号
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <polyline points="4 9 4 4 9 4" />
+      <polyline points="15 4 20 4 20 9" />
+      <polyline points="20 15 20 20 15 20" />
+      <polyline points="9 20 4 20 4 15" />
+    </svg>
   );
 }

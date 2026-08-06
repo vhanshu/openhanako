@@ -89,6 +89,7 @@
     "electron-updater": "^6.8.3",
     "exceljs": "^4.4.0",
     "extract-zip": "^2.0.1",
+    "highlight.js": "11.11.1",
     "hono": "^4.12.9",
     "js-yaml": "^4.1.0",
     "jsdom": "^29.0.2",
@@ -141,6 +142,7 @@
     "asar": true,
     "npmRebuild": false,
     "afterPack": "./scripts/fix-modules.cjs",
+    "electronDist": "build/electron-v42.3.0-dist",
     "extraMetadata": {
       "main": "desktop/bootstrap.cjs"
     },

@@ -299,6 +299,7 @@
     "screenshotSaved": "スクリーンショットを作業ディレクトリの「OH-Works」フォルダに保存しました",
     "screenshotSavedMultiple": "スクリーンショットを {count} 枚に分けて作業ディレクトリの「OH-Works」フォルダに保存しました",
     "screenshotFailed": "スクリーンショットの保存に失敗しました",
+    "screenshotWebOnly": "スクリーンショット機能はデスクトップ版でのみご利用いただけます。",
     "selectedCount": "{count} 件選択中",
     "allDone": "すべて完了",
     "markAllComplete": "すべて完了にする",
@@ -3443,7 +3444,11 @@
     "ariaLabel": "メディアプレビュー",
     "close": "閉じる",
     "prev": "前へ",
-    "next": "次へ"
+    "next": "次へ",
+    "actualSize": "等倍表示（1:1）",
+    "fit": "画面に合わせる",
+    "reset": "リセット",
+    "rotateCw": "右に回転"
   },
   "mobile": {
     "startupFailed": "HanaAgent の起動に失敗しました",

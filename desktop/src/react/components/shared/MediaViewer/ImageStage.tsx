@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
 import type { FileRef } from '../../../types/file-ref';
 import { loadMediaSource } from './media-source';
 import { fileRefVersionToken } from '../../../services/resource-url';
@@ -9,18 +9,61 @@ import styles from './MediaViewer.module.css';
 // 函数组件 props 里拿不到值，会导致 loadMediaSource(undefined) → 图片渲染不出来。
 interface Props {
   file: FileRef;
+  /** 仅作为初始 viewport 估计值。ImageStage 内部会用 ResizeObserver 读 stageWrap 真实尺寸。 */
   viewport: { width: number; height: number };
   neighbors?: { prev?: FileRef; next?: FileRef };
   zoomCmd?: { in: number; out: number; reset: number };
   onReady?: () => void;
   onError?: (e: unknown) => void;
+  /** transform 状态变化时回调（供顶层按 scale 切换按钮图标等） */
+  onTransformChange?: (scale: number) => void;
 }
 
-export function ImageStage({ file, viewport, neighbors, zoomCmd, onReady, onError }: Props) {
+/** 顶层工具栏需要的动作。 */
+export interface ImageStageActions {
+  reset: () => void;
+  rotateCw: () => void;
+  toggleActualSize: () => void;
+  getTransform: () => import('./use-media-transform').Transform;
+}
+
+export const ImageStage = forwardRef<ImageStageActions, Props>(function ImageStage(
+  { file, viewport, neighbors, zoomCmd, onReady, onError, onTransformChange },
+  ref,
+) {
   const [src, setSrc] = useState<string | null>(null);
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
+  const [stageSize, setStageSize] = useState({ width: viewport.width, height: viewport.height });
+  const stageRef = useRef<HTMLDivElement | null>(null);
   const imgElRef = useRef<HTMLImageElement | null>(null);
   const fileVersionToken = fileRefVersionToken(file);
+
+  // 监听父元素 stageWrap（不是自身 `.stage`）的真实尺寸变化。
+  // `.stage` 是 position:absolute，尺寸等于图片尺寸，不能拿来做 viewport。
+  // 监听 stageWrap 才能让初始 mount / 全屏切换 / resize 时拿到实际可视区域。
+  useLayoutEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const wrap = stage.parentElement;
+    if (!wrap) return;
+    const update = () => {
+      const rect = wrap.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        setStageSize((prev) => {
+          if (prev.width === rect.width && prev.height === rect.height) return prev;
+          return { width: rect.width, height: rect.height };
+        });
+      }
+    };
+    update();
+    if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver(update);
+      ro.observe(wrap);
+      return () => ro.disconnect();
+    }
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
 
   // 加载当前图
   useEffect(() => {
@@ -59,7 +102,7 @@ export function ImageStage({ file, viewport, neighbors, zoomCmd, onReady, onErro
 
   const transformApi = useMediaTransform({
     natural,
-    viewport: { w: viewport.width, h: viewport.height },
+    viewport: { w: stageSize.width, h: stageSize.height },
   });
 
   const {
@@ -75,6 +118,50 @@ export function ImageStage({ file, viewport, neighbors, zoomCmd, onReady, onErro
     isDragging,
   } = transformApi;
 
+  useImperativeHandle(ref, () => ({
+    reset: () => transformApi.reset(),
+    rotateCw: () => transformApi.rotateCw(),
+    toggleActualSize: () => transformApi.toggleActualSize(),
+    /** 只读快照，供顶层/测试调试。 */
+    getTransform: () => transformApi.transform,
+  }), [transformApi]);
+
+  // 守门员：natural 或 viewport 变化时首帧就要居中。使用 useLayoutEffect 在浏览器首绘前同步
+  // 设置 transform，避免用户看到“在 (0,0) 闪一下再跳到中心”的过程。
+  // 包括初始 mount（viewport 从占位 1×1 跳到 stageWrap 真实尺寸）和全屏切换（resize）。
+  useLayoutEffect(() => {
+    if (!natural) return;
+    transformApi.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [natural?.w, natural?.h, viewport.width, viewport.height]);
+
+  // 同步 scale 到顶层（供按 scale 切换按钮图标）
+  useEffect(() => {
+    onTransformChange?.(transform.scale);
+  }, [transform.scale, onTransformChange]);
+
+  // 用 native wheel 事件（passive: false），以使 onWheel 内的 e.preventDefault() 生效。
+  // React 合成 wheel 默认是 passive，会报 'Unable to preventDefault inside passive event listener'。
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const handler: EventListener = (e) => {
+      const wheel = e as WheelEvent;
+      onWheel({
+        deltaY: wheel.deltaY,
+        ctrlKey: wheel.ctrlKey,
+        metaKey: wheel.metaKey,
+        clientX: wheel.clientX,
+        clientY: wheel.clientY,
+        currentTarget: stage,
+        preventDefault: () => wheel.preventDefault(),
+      } as unknown as React.WheelEvent<HTMLElement>);
+    };
+    stage.addEventListener('wheel', handler, { passive: false });
+    return () => stage.removeEventListener('wheel', handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onWheel]);
+
   // 外壳的缩放命令（单调计数器）变化时触发对应动作
   const prevCmdRef = useRef({ in: 0, out: 0, reset: 0 });
   useEffect(() => {
@@ -86,8 +173,9 @@ export function ImageStage({ file, viewport, neighbors, zoomCmd, onReady, onErro
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zoomCmd?.in, zoomCmd?.out, zoomCmd?.reset]);
 
+  // drag 总是可用；只有放大时 cursor 才改成 grab。
   const isZoomed = transform.scale > fitScale + 0.01;
-  const cursorStyle = isDragging ? 'grabbing' : isZoomed ? 'grab' : 'default';
+  const cursorStyle = isDragging ? 'grabbing' : 'grab';
 
   return (
     <div
@@ -96,13 +184,19 @@ export function ImageStage({ file, viewport, neighbors, zoomCmd, onReady, onErro
       data-zoom-in-seq={zoomCmd?.in ?? 0}
       data-zoom-out-seq={zoomCmd?.out ?? 0}
       data-reset-seq={zoomCmd?.reset ?? 0}
+      data-rotation={transform.rotation}
       onWheel={onWheel}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerCancel}
       onDoubleClick={onDoubleClick}
-      style={{ transform: cssTransform, cursor: cursorStyle }}
+      style={{
+        transform: cssTransform,
+        cursor: cursorStyle,
+        // 旋转绕图片中心而非 transform-origin 默认的左上角，否则放大后旋转会跳位。
+        transformOrigin: 'center center',
+      }}
     >
       {!src && <div className={styles.spinner} data-testid="image-stage-spinner" />}
       {src && (
@@ -122,4 +216,4 @@ export function ImageStage({ file, viewport, neighbors, zoomCmd, onReady, onErro
       )}
     </div>
   );
-}
+});

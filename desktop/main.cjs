@@ -4478,6 +4478,22 @@ function _getKatexCSS() {
   return _screenshotKatexCSS;
 }
 
+let _screenshotHighlightCSS = null;
+function _getHighlightCSS() {
+  if (_screenshotHighlightCSS !== null) return _screenshotHighlightCSS;
+  _screenshotHighlightCSS = "";
+  try {
+    const candidates = [
+      require.resolve("highlight.js/styles/atom-one-dark.css"),
+      path.join(__dirname, "node_modules", "highlight.js", "styles", "atom-one-dark.css"),
+    ];
+    for (const p of candidates) {
+      if (fs.existsSync(p)) { _screenshotHighlightCSS = fs.readFileSync(p, "utf-8"); break; }
+    }
+  } catch { /* highlight.js not available */ }
+  return _screenshotHighlightCSS;
+}
+
 function buildScreenshotHTML(payload) {
   const md = _getScreenshotMd();
 
@@ -4489,6 +4505,7 @@ function buildScreenshotHTML(payload) {
   const themeCSS = fs.readFileSync(themeCssPath, "utf-8");
 
   const katexCSS = _getKatexCSS();
+  const highlightCSS = _getHighlightCSS();
 
   const screenshotFontFamily = sanitizeScreenshotFontFamily(payload.fontFamily);
   let extraCSS = `:root { --screenshot-page-bg: ${themeConf.backgroundColor}; --screenshot-font-family: ${screenshotFontFamily}; }`;
@@ -4505,6 +4522,41 @@ function buildScreenshotHTML(payload) {
     ? "5rem"
     : (isDesktopScreenshotTheme ? "2rem" : "5rem");
   extraCSS += `\n:root { --screenshot-cover-bleed-top: ${coverBleedTop}; }`;
+  // 截图线代码块样式：
+  // 1. 全局 pre：tab 统一 4 空格、默认开启自动换行；截图时不限制 max-height，让长代码完整展开。
+  //    覆盖 themeCSS 的 pre { overflow-x: auto }——这里强制换行，不再横向滚动。
+  // 2. .screenshot-code-block > pre：仅清零外边距（wrap 自带 padding-top），其余继承全局规则。
+  // 注意：lang 标签必须钉在 wrap 上而不是 pre 上——pre 在超长代码里会滚动，::before 会跟走。
+  extraCSS += `
+pre {
+  tab-size: 4;
+  -moz-tab-size: 4;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-x: hidden;
+}
+.screenshot-code-block[data-lang] {
+  position: relative;
+  padding-top: calc(2.25rem + 0.5em);
+}
+.screenshot-code-block > pre {
+  margin: 0;
+}
+.screenshot-code-block[data-lang]::before {
+  content: attr(data-lang);
+  position: absolute;
+  top: 0.6rem;
+  left: 1rem;
+  font-family: "JetBrains Mono", "Fira Code", "SF Mono", "Consolas", monospace;
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  color: inherit;
+  opacity: 0.55;
+  pointer-events: none;
+  user-select: none;
+}`;
 
   // Logo 内联为 base64 data URL（asar 内文件无法被离屏窗口的 file:// 加载）
   let logoUrl = "";
@@ -4821,6 +4873,7 @@ function buildScreenshotHTML(payload) {
 <head>
   <meta charset="UTF-8">
   <style>${katexCSS}</style>
+  <style>${highlightCSS}</style>
   <style>${themeCSS}</style>
   <style>${extraCSS}</style>
   <style>${layoutCSS}</style>

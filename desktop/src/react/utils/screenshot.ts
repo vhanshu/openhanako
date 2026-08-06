@@ -201,7 +201,8 @@ export async function takeScreenshot(targetMessageId: string, sessionPath: strin
   const t = window.t ?? ((p: string) => p);
   const hana = (window as any).hana;
   if (!hana?.screenshotRender) {
-    dispatchInlineNotice(t('common.screenshotFailed'), 'error');
+    // Electron preload 会注入 window.hana；web 端没有 hana，报更友好的“仅桌面端可用”提示。
+    dispatchInlineNotice(t(hana ? 'common.screenshotFailed' : 'common.screenshotWebOnly'), 'error');
     return;
   }
 
@@ -257,7 +258,8 @@ export async function takeArticleScreenshot(markdown: string, options: ArticleSc
   const t = window.t ?? ((p: string) => p);
   const hana = (window as any).hana;
   if (!hana?.screenshotRender) {
-    dispatchInlineNotice(t('common.screenshotFailed'), 'error');
+    // Electron preload 会注入 window.hana；web 端没有 hana，报更友好的“仅桌面端可用”提示。
+    dispatchInlineNotice(t(hana ? 'common.screenshotFailed' : 'common.screenshotWebOnly'), 'error');
     return;
   }
 

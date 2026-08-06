@@ -13,7 +13,8 @@
   position: absolute;
   top: 0;
   left: 0;
-  transform-origin: 0 0;
+  /* transform-origin 由 ImageStage 以 inline style 控制（默认 center center），
+     这里不设，避免与旋转/缩放绕中心的逻辑冲突。 */
   user-select: none;
   touch-action: none;
 }
@@ -69,6 +70,40 @@
   border-radius: 2px;
 }
 .closeBtn:hover { background: rgba(255, 255, 255, 0.14); }
+
+.topbarActions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.iconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: default;
+  padding: 6px 8px;
+  border-radius: 2px;
+  opacity: 0.85;
+  transition: opacity var(--duration-instant), background var(--duration-instant);
+}
+
+.iconBtn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  opacity: 1;
+}
+
+.iconBtn:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.6);
+  outline-offset: 1px;
+}
+
+.iconBtn svg {
+  display: block;
+}
 
 .captionBar {
   position: fixed;

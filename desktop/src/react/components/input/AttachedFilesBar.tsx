@@ -1,13 +1,27 @@
-import { memo } from 'react';
+import { memo, type MouseEvent } from 'react';
 import { AttachmentChip } from '../shared/AttachmentChip';
 import { AudioAttachmentChip } from '../shared/AudioAttachmentChip';
 import { FolderIcon } from '../shared/FolderIcon';
 import { kindOfFileName } from '../../utils/file-kind';
 import styles from './InputArea.module.css';
 
-export const AttachedFilesBar = memo(function AttachedFilesBar({ files, onRemove }: {
-  files: Array<{ path: string; name: string; isDirectory?: boolean; base64Data?: string; mimeType?: string }>;
+export interface AttachedFileChip {
+  path: string;
+  name: string;
+  isDirectory?: boolean;
+  base64Data?: string;
+  mimeType?: string;
+}
+
+export const AttachedFilesBar = memo(function AttachedFilesBar({
+  files,
+  onRemove,
+  onChipClick,
+}: {
+  files: AttachedFileChip[];
   onRemove: (index: number) => void;
+  /** chip 本体点击：上层据此打开预览/打开文件。不传则 chip 不可点。 */
+  onChipClick?: (file: AttachedFileChip, event: MouseEvent<HTMLSpanElement>) => void;
 }) {
   return (
     <div className={styles['attached-files']}>
@@ -28,6 +42,7 @@ export const AttachedFilesBar = memo(function AttachedFilesBar({ files, onRemove
               key={f.path}
               file={f}
               onRemove={() => onRemove(i)}
+              onClick={onChipClick ? (event) => onChipClick(f, event) : undefined}
             />
           );
         }
@@ -37,6 +52,7 @@ export const AttachedFilesBar = memo(function AttachedFilesBar({ files, onRemove
             icon={f.isDirectory ? <FolderIcon /> : <ClipIcon />}
             name={f.name}
             onRemove={() => onRemove(i)}
+            onClick={onChipClick ? (event) => onChipClick(f, event) : undefined}
           />
         );
       })}
@@ -47,13 +63,36 @@ export const AttachedFilesBar = memo(function AttachedFilesBar({ files, onRemove
 function ImageAttachmentChip({
   file,
   onRemove,
+  onClick,
 }: {
-  file: { path: string; name: string; base64Data?: string; mimeType?: string };
+  file: AttachedFileChip;
   onRemove: () => void;
+  onClick?: (event: MouseEvent<HTMLSpanElement>) => void;
 }) {
   const src = getMediaUrl(file);
+  const interactive = Boolean(onClick);
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLSpanElement>) => {
+    if (!onClick) return;
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      onClick(event as unknown as MouseEvent<HTMLSpanElement>);
+    }
+  };
+  const handleRemoveClick = (event: MouseEvent<HTMLButtonElement>) => {
+    // 阻止点 X 触发 chip 本体点击
+    event.stopPropagation();
+    onRemove();
+  };
   return (
-    <span className={styles['media-attachment-chip']} title={file.name}>
+    <span
+      className={`${styles['media-attachment-chip']}${interactive ? ` ${styles['media-attachment-chip-interactive']}` : ''}`}
+      title={interactive ? `${file.name}（点击预览）` : file.name}
+      role={interactive ? 'button' : undefined}
+      tabIndex={interactive ? 0 : undefined}
+      aria-label={interactive ? `${file.name}（点击预览）` : undefined}
+      onClick={interactive ? onClick : undefined}
+      onKeyDown={interactive ? handleKeyDown : undefined}
+    >
       <span className={styles['image-attachment-preview']} aria-hidden="true">
         {src ? (
           <img src={src} alt="" />
@@ -62,12 +101,12 @@ function ImageAttachmentChip({
         )}
       </span>
       <span className={styles['media-attachment-name']}>{file.name}</span>
-      <RemoveButton name={file.name} onRemove={onRemove} />
+      <RemoveButton name={file.name} onRemove={handleRemoveClick} />
     </span>
   );
 }
 
-function RemoveButton({ name, onRemove }: { name: string; onRemove: () => void }) {
+function RemoveButton({ name, onRemove }: { name: string; onRemove: (event: MouseEvent<HTMLButtonElement>) => void }) {
   return (
     <button
       type="button"

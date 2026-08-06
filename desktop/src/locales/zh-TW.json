@@ -299,6 +299,7 @@
     "screenshotSaved": "截圖已儲存到工作目錄下的「OH-Works」資料夾",
     "screenshotSavedMultiple": "截圖已分成 {count} 張儲存到工作目錄下的「OH-Works」資料夾",
     "screenshotFailed": "截圖儲存失敗",
+    "screenshotWebOnly": "截圖功能僅桌面版可用，請在桌面版使用",
     "selectedCount": "已選 {count} 則",
     "allDone": "全部完成",
     "markAllComplete": "全部標記為已完成",
@@ -3440,10 +3441,14 @@
     }
   },
   "mediaViewer": {
-    "ariaLabel": "媒体预览",
-    "close": "关闭",
-    "prev": "上一张",
-    "next": "下一张"
+    "ariaLabel": "媒體預覽",
+    "close": "關閉",
+    "prev": "上一張",
+    "next": "下一張",
+    "actualSize": "1:1 原始大小",
+    "fit": "適應螢幕",
+    "reset": "重置",
+    "rotateCw": "向右旋轉"
   },
   "mobile": {
     "startupFailed": "HanaAgent 启动失败",

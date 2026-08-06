@@ -347,23 +347,55 @@ async function extract(archivePath, destDir) {
  * @param {string} archivePath
  * @returns {Promise<void>}
  */
-async function packTree(srcDir, archivePath) {
+async function packTree(srcDir, archivePath, deps = {}) {
   const resolvedSrc = path.resolve(srcDir);
   await fsp.mkdir(path.dirname(archivePath), { recursive: true });
 
+  const createReadStream = deps.createReadStream || fs.createReadStream;
+  const lstat = deps.lstat || fsp.lstat;
+
   const gzip = zlib.createGzip();
   const out = fs.createWriteStream(archivePath);
+  let settle;
   const done = new Promise((resolve, reject) => {
-    out.on("finish", resolve);
-    out.on("error", reject);
-    gzip.on("error", reject);
+    settle = { resolve, reject };
+    out.on("finish", () => settle.resolve());
+    // Use a once-listener that we can detach from `fail()` so the `done`
+    // promise doesn't fire `reject()` after the walk threw — otherwise the
+    // rejected promise has no `.catch` attached and Node escalates it to
+    // `unhandledRejection`, surfacing as a noisy unhandled error in vitest
+    // even though our outer try/catch already rethrew the real cause.
+    out.once("error", (err) => settle.reject(err));
+    gzip.once("error", (err) => settle.reject(err));
   });
   gzip.pipe(out);
+
+  let aborted = false;
+  let abortErr = null;
+  // Yield to the event loop between files so Node can release read-stream
+  // file descriptors back to its libuv pool. Without this, `for await` over
+  // the read stream runs to completion synchronously, the stream's fd only
+  // closes on next tick, and a deep node_modules tree exhausts the per-process
+  // fd budget on Windows (default 512) long before gzip drains. setImmediate
+  // (not setTimeout) gives a single-tick release window without slowing the
+  // overall packing speed noticeably.
+  const yieldFdBudget = () => new Promise((resolve) => setImmediate(resolve));
 
   async function writeBlock(block) {
     if (!gzip.write(block)) {
       await new Promise((resolve) => gzip.once("drain", resolve));
     }
+  }
+
+  function fail(err) {
+    if (aborted) return;
+    aborted = true;
+    abortErr = err;
+    // Detach the write-stream error listener BEFORE the outer catch throws
+    // so `done` does not get rejected afterwards (which would surface as
+    // an unhandledRejection in vitest after the walk has already thrown).
+    try { out.removeAllListeners("error"); } catch (_) { /* ok */ }
+    try { gzip.removeAllListeners("error"); } catch (_) { /* ok */ }
   }
 
   async function walk(relDir) {
@@ -374,7 +406,7 @@ async function packTree(srcDir, archivePath) {
     for (const entry of entries) {
       const relPath = relDir ? `${relDir}/${entry.name}` : entry.name;
       const absPath = path.join(resolvedSrc, relPath);
-      const stat = await fsp.lstat(absPath);
+      const stat = await lstat(absPath);
 
       if (stat.isSymbolicLink()) {
         throw new Error(`packTree: refusing to pack symlink: ${relPath}`);
@@ -402,27 +434,69 @@ async function packTree(srcDir, archivePath) {
             mtimeSec: Math.floor(stat.mtimeMs / 1000),
           }),
         );
-        const fileStream = fs.createReadStream(absPath);
         let written = 0;
-        for await (const chunk of fileStream) {
-          written += chunk.length;
-          await writeBlock(chunk);
+        // Manual stream so we can `.destroy()` and `await yieldFdBudget()`
+        // before the next file. `for await` over a streams iterator consumes
+        // every chunk synchronously, which leaves the previous file's fd
+        // open until the next microtask, accumulating fds across the walk.
+        const fileStream = createReadStream(absPath, { highWaterMark: 64 * 1024 });
+        try {
+          for await (const chunk of fileStream) {
+            written += chunk.length;
+            await writeBlock(chunk);
+          }
+        } catch (err) {
+          fileStream.destroy();
+          fail(err);
+          throw err;
         }
         if (written !== stat.size) {
-          throw new Error(`packTree: size changed while packing ${relPath} (expected ${stat.size}, wrote ${written})`);
+          const err = new Error(`packTree: size changed while packing ${relPath} (expected ${stat.size}, wrote ${written})`);
+          fail(err);
+          throw err;
         }
         const pad = written % BLOCK_SIZE === 0 ? 0 : BLOCK_SIZE - (written % BLOCK_SIZE);
         if (pad > 0) await writeBlock(Buffer.alloc(pad, 0));
+        // Let libuv close the just-finished fd before we open the next file.
+        await yieldFdBudget();
       } else {
         throw new Error(`packTree: unsupported file type for entry: ${relPath}`);
       }
     }
   }
 
-  await walk("");
+  try {
+    await walk("");
+  } catch (err) {
+    if (!abortErr) fail(err);
+    // End the gzip stream gracefully (no further writes) so the write-stream
+    // can drain whatever is buffered and emit `finish`. We then unlink the
+    // resulting file — the half-written archive must never survive, or a
+    // later `npm run pack` could mistake a 0-byte `server-<ver>-<plat>-<arch>.tar.gz`
+    // for a real seed. We do NOT call `out.destroy()` here: a forced
+    // destroy while gzip is still piping causes ERR_STREAM_DESTROYED
+    // uncaughtException on Windows.
+    try { gzip.end(); } catch (_) { /* already ended */ }
+    try { await done; } catch (_) { /* errors here are expected on failure */ }
+    try { await fsp.unlink(archivePath); } catch (_) { /* nothing to clean */ }
+    if (!abortErr) throw err;
+    throw abortErr;
+  }
+  if (aborted) {
+    try { gzip.end(); } catch (_) { /* already ended */ }
+    try { await done; } catch (_) { /* expected */ }
+    try { await fsp.unlink(archivePath); } catch (_) { /* nothing to clean */ }
+    throw abortErr;
+  }
   await writeBlock(Buffer.alloc(BLOCK_SIZE * 2, 0)); // end-of-archive terminator
   gzip.end();
-  await done;
+  try {
+    await done;
+  } catch (err) {
+    // Late write error during flush: same cleanup contract.
+    try { await fsp.unlink(archivePath); } catch (_) { /* nothing to clean */ }
+    throw err;
+  }
 }
 
 module.exports = {

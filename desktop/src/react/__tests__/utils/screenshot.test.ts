@@ -50,6 +50,7 @@ describe('screenshot utils', () => {
     window.addEventListener('hana-inline-notice', noticeHandler);
     (window as any).t = (key: string) => (
       key === 'common.screenshotFailed' ? '截图保存失败'
+        : key === 'common.screenshotWebOnly' ? '截图功能仅桌面端可用'
         : key === 'common.screenshotSaved' ? '截图已保存'
           : key
     );
@@ -61,6 +62,18 @@ describe('screenshot utils', () => {
     delete (window as any).hana;
     delete (window as any).t;
     delete (window as any).i18n;
+  });
+
+  it('web 端（window.hana 不存在）点击截图按钮时，提示仅桌面端可用', async () => {
+    // afterEach 会删 window.hana，所以默认就是 web 端状态
+    await expect(takeArticleScreenshot('# hello')).resolves.toBeUndefined();
+
+    expect(notices).toEqual([
+      expect.objectContaining({
+        type: 'error',
+        text: expect.stringContaining('桌面'),
+      }),
+    ]);
   });
 
   it('主进程 IPC reject 时，给用户发出明确失败提示而不是变成未处理异常', async () => {

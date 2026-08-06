@@ -30,6 +30,7 @@ import {
   hasMarkdownCoverDropImage,
 } from '../../utils/markdown-cover-drop';
 import { parseCSV, injectCopyButtons } from '../../utils/format';
+import { highlightFence } from '../../utils/markdown-highlight';
 import { observeMarkdownRhythmSnap } from '../../utils/markdown-rhythm';
 import { fileIconSvg } from '../../utils/icons';
 import { openFilePreview } from '../../utils/file-preview';
@@ -711,6 +712,33 @@ function FileInfoPreview({ previewItem }: { previewItem: PreviewItem }) {
   );
 }
 
+// 代码预览：调 highlight.js 高亮（跟对话消息的代码块走同一个高亮函数）
+function CodePreview({ content, language }: { content: string; language?: string }) {
+  const highlighted = useMemo(() => {
+    if (!language) return null;
+    return highlightFence(content, language);
+  }, [content, language]);
+
+  if (!highlighted) {
+    return (
+      <pre className="preview-code">
+        <code className={language ? `language-${language}` : undefined}>
+          {content}
+        </code>
+      </pre>
+    );
+  }
+
+  return (
+    <pre className="preview-code hljs">
+      <code
+        className={`hljs language-${highlighted.language}`}
+        dangerouslySetInnerHTML={{ __html: highlighted.html }}
+      />
+    </pre>
+  );
+}
+
 // ── PreviewRenderer ──
 
 export function PreviewRenderer({ previewItem }: PreviewRendererProps) {
@@ -727,11 +755,10 @@ export function PreviewRenderer({ previewItem }: PreviewRendererProps) {
 
     case 'code':
       return (
-        <pre className="preview-code">
-          <code className={previewItem.language ? `language-${previewItem.language}` : undefined}>
-            {previewItem.content}
-          </code>
-        </pre>
+        <CodePreview
+          content={previewItem.content}
+          language={previewItem.language}
+        />
       );
 
     case 'csv':

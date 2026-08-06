@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import {
   appendConnectionAuth,
   buildConnectionUrl,
@@ -8,8 +8,11 @@ import {
 } from '../services/server-connection';
 import { PlanModeButton, type PermissionMode } from '../components/input/PlanModeButton';
 import { SendButton } from '../components/input/SendButton';
-import { AttachedFilesBar } from '../components/input/AttachedFilesBar';
+import { AttachedFilesBar, type AttachedFileChip } from '../components/input/AttachedFilesBar';
 import { ChatTranscript } from '../components/chat/ChatTranscript';
+import { extOfName, kindOfFileName } from '../utils/file-kind';
+import { openFilePreview } from '../utils/file-preview';
+import { openMediaViewerFromContext } from '../utils/open-media-viewer';
 import { handleServerMessage } from '../services/ws-message-handler';
 import { useStore } from '../stores';
 import { sessionScopedListIncludes, sessionScopedValue } from '../stores/session-slice';
@@ -395,6 +398,31 @@ export function QuickChatApp() {
     lastHiddenAtRef.current = Date.now();
   }, []);
 
+  /**
+   * 点 quick-chat 输入区附件 chip：
+   *   - 图片 / SVG / 视频 → 全屏 MediaViewer
+   *   - 可预览 ext → 应用内文件预览（openFilePreview）
+   *   - 其它 → 系统默认应用打开
+   */
+  const handleQuickChatAttachmentClick = useCallback((file: AttachedFileChip, _event: ReactMouseEvent<HTMLSpanElement>) => {
+    const kind = kindOfFileName(file.name || file.path, file.mimeType);
+    const ext = extOfName(file.name || file.path) ?? '';
+    if (kind === 'image' || kind === 'svg' || kind === 'video') {
+      openMediaViewerFromContext({
+        filePath: file.path,
+        label: file.name,
+        ext,
+        kind,
+        origin: 'desk',
+      });
+      return;
+    }
+    openFilePreview(file.path, file.name, ext, { origin: 'desk' })
+      .catch(() => {
+        window.platform?.openFile?.(file.path);
+      });
+  }, []);
+
   const resetDetachedSession = useCallback(() => {
     if (isStreamingRef.current || sendingRef.current) return;
     wsRef.current?.close();
@@ -764,6 +792,7 @@ export function QuickChatApp() {
                   const target = attachments[index];
                   if (target) removeAttachment(target.id);
                 }}
+                onChipClick={handleQuickChatAttachmentClick}
               />
             </div>
           )}

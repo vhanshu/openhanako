@@ -633,7 +633,7 @@ export async function pruneServerNodeModulesViaNft({
  *
  * @param {{ outDir: string, platform: string, arch: string, log?: (msg: string) => void }} params
  */
-export function applyPlatformPackageTrim({ outDir, platform, arch, log = (msg) => console.log(msg) }) {
+export async function applyPlatformPackageTrim({ outDir, platform, arch, log = (msg) => console.log(msg) }) {
   const nmDir = path.join(outDir, "node_modules");
 
   const koffiBuilds = path.join(nmDir, "koffi", "build", "koffi");
@@ -678,7 +678,7 @@ export function applyPlatformPackageTrim({ outDir, platform, arch, log = (msg) =
     log("[build-server] cleanup: removed exceljs/dist/ (~21MB browser bundle)");
   }
 
-  const { removedFiles: prunedFiles, removedSize: prunedSize } = pruneRuntimeDeadFiles(nmDir);
+  const { removedFiles: prunedFiles, removedSize: prunedSize } = await pruneRuntimeDeadFiles(nmDir);
   const prunedMB = (prunedSize / 1024 / 1024).toFixed(1);
   log(`[build-server] prune: removed ${prunedFiles} runtime-dead files from node_modules (${prunedMB}MB)`);
 }

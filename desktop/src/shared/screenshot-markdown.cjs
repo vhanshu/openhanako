@@ -1,5 +1,97 @@
 const { pathToFileUrl } = require("./path-to-file-url.cjs");
 
+let _hljs = null;
+function _getHljs() {
+  if (_hljs) return _hljs;
+  try {
+    const hljs = require("highlight.js/lib/core");
+    const languages = {
+      typescript: require("highlight.js/lib/languages/typescript"),
+      javascript: require("highlight.js/lib/languages/javascript"),
+      json: require("highlight.js/lib/languages/json"),
+      bash: require("highlight.js/lib/languages/bash"),
+      python: require("highlight.js/lib/languages/python"),
+      go: require("highlight.js/lib/languages/go"),
+      rust: require("highlight.js/lib/languages/rust"),
+      java: require("highlight.js/lib/languages/java"),
+      kotlin: require("highlight.js/lib/languages/kotlin"),
+      swift: require("highlight.js/lib/languages/swift"),
+      c: require("highlight.js/lib/languages/c"),
+      cpp: require("highlight.js/lib/languages/cpp"),
+      csharp: require("highlight.js/lib/languages/csharp"),
+      css: require("highlight.js/lib/languages/css"),
+      scss: require("highlight.js/lib/languages/scss"),
+      xml: require("highlight.js/lib/languages/xml"),
+      yaml: require("highlight.js/lib/languages/yaml"),
+      ini: require("highlight.js/lib/languages/ini"),
+      sql: require("highlight.js/lib/languages/sql"),
+      markdown: require("highlight.js/lib/languages/markdown"),
+      dockerfile: require("highlight.js/lib/languages/dockerfile"),
+      makefile: require("highlight.js/lib/languages/makefile"),
+      lua: require("highlight.js/lib/languages/lua"),
+      php: require("highlight.js/lib/languages/php"),
+      ruby: require("highlight.js/lib/languages/ruby"),
+      dart: require("highlight.js/lib/languages/dart"),
+      diff: require("highlight.js/lib/languages/diff"),
+    };
+    const aliases = { cs: languages.csharp, toml: languages.ini };
+    for (const name of Object.keys(languages)) hljs.registerLanguage(name, languages[name]);
+    for (const [name, fn] of Object.entries(aliases)) hljs.registerLanguage(name, fn);
+    _hljs = hljs;
+    return _hljs;
+  } catch {
+    _hljs = null;
+    return null;
+  }
+}
+
+// 围栏 info 字符串 → highlight.js 注册名（与 React 端 markdown-highlight.ts 保持一致）。
+const LANG_ALIASES = {
+  ts: "typescript", typescript: "typescript",
+  js: "javascript", javascript: "javascript", jsx: "javascript", tsx: "typescript",
+  mjs: "javascript", cjs: "javascript",
+  sh: "bash", bash: "bash", shell: "bash", zsh: "bash",
+  py: "python", python: "python",
+  golang: "go", go: "go",
+  rs: "rust", rust: "rust",
+  kt: "kotlin", kotlin: "kotlin",
+  swift: "swift",
+  c: "c", h: "c",
+  cpp: "cpp", cxx: "cpp", cc: "cpp",
+  csharp: "cs", cs: "cs",
+  css: "css", scss: "scss", sass: "scss",
+  html: "xml", htm: "xml", xml: "xml", svg: "xml", vue: "xml",
+  yml: "yaml", yaml: "yaml",
+  toml: "toml", sql: "sql",
+  md: "markdown", markdown: "markdown",
+  dockerfile: "dockerfile", docker: "dockerfile",
+  makefile: "makefile", mk: "makefile",
+  lua: "lua", php: "php",
+  rb: "ruby", ruby: "ruby",
+  dart: "dart", diff: "diff", patch: "diff",
+};
+
+function highlightScreenshotFence(content, info) {
+  const hljs = _getHljs();
+  if (!hljs) return null;
+  const rawLang = String(info || "").trim().split(/\s+/)[0]?.toLowerCase() || "";
+  if (!rawLang) return null;
+  const target = LANG_ALIASES[rawLang];
+  if (target && hljs.getLanguage(target)) {
+    try {
+      const result = hljs.highlight(content, { language: target, ignoreUnescapedHTML: true });
+      return { html: result.value, language: target };
+    } catch { /* fall through */ }
+  }
+  try {
+    const result = hljs.highlightAuto(content, { ignoreUnescapedHTML: true });
+    if (result.language && result.language !== "plaintext") {
+      return { html: result.value, language: result.language };
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
 const EXPLICIT_PROTOCOL_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
 const SAFE_IMAGE_URL_PROTOCOLS = new Set(["http:", "https:", "file:", "data:"]);
 const FRONT_MATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
@@ -129,6 +221,7 @@ function markdownTableScrollWrapper(md) {
 
 function decorateScreenshotMarkdownIt(md) {
   markdownTableScrollWrapper(md);
+  screenshotCodeHighlight(md);
   const defaultImage = md.renderer.rules.image
     || ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
 
@@ -141,6 +234,23 @@ function decorateScreenshotMarkdownIt(md) {
       }));
     }
     return defaultImage(tokens, idx, options, env, self);
+  };
+}
+
+function screenshotCodeHighlight(md) {
+  const defaultFence = md.renderer.rules.fence
+    || ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
+
+  md.renderer.rules.fence = (tokens, idx, options, env, self) => {
+    const token = tokens[idx];
+    const info = token.info || "";
+    if (info.trim().split(/\s+/)[0]?.toLowerCase() === "mermaid") {
+      // mermaid 走截图自身的占位渲染，截图产物不内嵌 mermaid 图，这里原样交给默认规则。
+      return defaultFence(tokens, idx, options, env, self);
+    }
+    const highlighted = highlightScreenshotFence(token.content, info);
+    if (!highlighted) return defaultFence(tokens, idx, options, env, self);
+    return `<div class="screenshot-code-block" data-lang="${highlighted.language}"><pre class="hljs"><code class="hljs language-${highlighted.language}">${highlighted.html}</code></pre></div>\n`;
   };
 }
 
@@ -217,6 +327,7 @@ function renderScreenshotCodeArticle(source, language) {
 module.exports = {
   decorateScreenshotMarkdownIt,
   escapeAttr,
+  highlightScreenshotFence,
   parseScreenshotMarkdownCover,
   renderScreenshotMarkdownArticle,
   renderScreenshotCodeArticle,

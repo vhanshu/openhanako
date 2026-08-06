@@ -5,7 +5,7 @@
  * 斜杠命令逻辑在 ./input/slash-commands.ts。
  */
 
-import { useState, useEffect, useRef, useCallback, useMemo, type ChangeEvent } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, type ChangeEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import type { Editor, JSONContent } from '@tiptap/core';
 import { useStore } from '../stores';
@@ -15,7 +15,9 @@ import { sessionScopedListIncludes, sessionScopedValue } from '../stores/session
 import { isSessionCompacting } from '../stores/context-slice';
 import { selectSessionFiles } from '../stores/selectors/file-refs';
 import { isImageFile, isVideoFile } from '../utils/format';
-import { isAudioFileName } from '../utils/file-kind';
+import { extOfName, isAudioFileName, kindOfFileName } from '../utils/file-kind';
+import { openFilePreview } from '../utils/file-preview';
+import { openMediaViewerFromContext } from '../utils/open-media-viewer';
 import { useI18n } from '../hooks/use-i18n';
 import {
   continueDeletedAgentSession,
@@ -2150,6 +2152,35 @@ function InputAreaInner({ surface }: Required<InputAreaProps>) {
     void revealDeskDirectory(slashResult.deskDir);
   }, [slashResult?.deskDir, slashResult?.filePath]);
 
+  /**
+   * 点输入区附件 chip：
+   *   - 图片 / SVG / 视频 → 全屏 MediaViewer
+   *   - 文本 / Markdown / PDF / docx / xlsx / 代码 → 应用内文件预览（openFilePreview）
+   *   - 其它未知 ext → 系统默认应用打开
+   * 音频走 AudioAttachmentChip 自己的播放控件，不走这里。
+   */
+  const handleAttachedChipClick = useCallback((file: { path: string; name: string; isDirectory?: boolean; mimeType?: string }, _event: ReactMouseEvent<HTMLSpanElement>) => {
+    if (file.isDirectory) return;
+    const kind = kindOfFileName(file.name || file.path, file.mimeType);
+    const ext = extOfName(file.name || file.path) ?? '';
+    if (kind === 'image' || kind === 'svg' || kind === 'video') {
+      openMediaViewerFromContext({
+        filePath: file.path,
+        label: file.name,
+        ext,
+        kind,
+        origin: 'desk',
+      });
+      return;
+    }
+    // Markdown / 代码 / JSON / CSV / PDF / docx / xlsx 等走应用内预览；其它走系统默认打开。
+    openFilePreview(file.path, file.name, ext, { origin: 'desk' })
+      .catch(() => {
+        // openFilePreview 内部已 toast，这里兜底调系统默认
+        window.platform?.openFile?.(file.path);
+      });
+  }, []);
+
   const handleContinueDeletedAgentSession = useCallback(async () => {
     const path = currentSessionPath;
     if (!path || continuingDeletedAgentSession) return;
@@ -2175,6 +2206,7 @@ function InputAreaInner({ surface }: Required<InputAreaProps>) {
         attachedFiles={attachedFiles}
         removeAttachedFile={removeAttachedFile}
         hasQuotedSelection={quotedSelections.length > 0}
+        onChipClick={handleAttachedChipClick}
       />
       <InputStatusBars
         slashBusy={slashBusy}

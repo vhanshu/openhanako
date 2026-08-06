@@ -452,4 +452,63 @@ describe('renderMarkdown', () => {
     expect(html).toContain('preview callout');
     expect(html).not.toContain('[!tip]');
   });
+
+  it('highlights TypeScript fenced code blocks with highlight.js token spans', () => {
+    const html = renderMarkdown([
+      '```ts',
+      'const greeting: string = "hi";',
+      '```',
+    ].join('\n'));
+
+    expect(html).toContain('<pre class="hljs" data-lang="typescript"><code class="hljs language-typescript">');
+    expect(html).toContain('class="hljs-keyword"');
+    expect(html).toContain('const');
+    expect(html).toContain('class="hljs-string"');
+    expect(html).not.toContain('<code class="language-ts">');
+  });
+
+  it('maps common language aliases to the registered highlight.js grammar', () => {
+    const html = renderMarkdown([
+      '```py',
+      'def f(x):',
+      '    return x + 1',
+      '```',
+    ].join('\n'));
+
+    expect(html).toContain('language-python');
+    expect(html).toContain('data-lang="python"');
+    expect(html).toContain('class="hljs-keyword"');
+    expect(html).toContain('def');
+  });
+
+  it('leaves unspecified-language fences unstyled instead of guessing', () => {
+    const html = renderMarkdown([
+      '```',
+      'plain text & <html>',
+      '```',
+    ].join('\n'));
+
+    expect(html).not.toContain('class="hljs language-');
+    expect(html).toContain('plain text &amp; &lt;html&gt;');
+  });
+
+  it('does not interfere with mermaid fenced blocks', () => {
+    const html = renderMarkdown([
+      '```mermaid',
+      'graph TD',
+      '  A-->B',
+      '```',
+    ].join('\n'));
+
+    expect(html).toContain('class="mermaid-diagram"');
+    expect(html).not.toContain('class="hljs language-mermaid"');
+  });
+
+  it('falls back gracefully when an unknown language is requested', () => {
+    expect(() => renderMarkdown([
+      '```made-up-lang',
+      'whatever = 1',
+      '```',
+    ].join('\n'))).not.toThrow();
+  });
 });

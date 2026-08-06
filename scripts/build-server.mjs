@@ -189,7 +189,7 @@ await pruneServerNodeModulesViaNft({
 });
 
 // ── 8. 平台裁剪 + node_modules 死重清理 ──
-applyPlatformPackageTrim({ outDir, platform, arch });
+await applyPlatformPackageTrim({ outDir, platform, arch });
 
 // ── 9. 更新 package.json ──
 // fromRoot("package.json") 在运行时读取版本号

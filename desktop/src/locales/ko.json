@@ -299,6 +299,7 @@
     "screenshotSaved": "작업 디렉터리의 「OH-Works」 폴더에 스크린샷이 저장되었습니다",
     "screenshotSavedMultiple": "스크린샷을 {count}개로 나누어 작업 디렉터리의 「OH-Works」 폴더에 저장했습니다",
     "screenshotFailed": "스크린샷 저장 실패",
+    "screenshotWebOnly": "스크린샷 기능은 데스크톱 버전에서만 사용할 수 있습니다. 데스크톱 버전에서 사용해주세요.",
     "selectedCount": "{count}개 선택됨",
     "allDone": "모두 완료",
     "markAllComplete": "모두 완료로 표시",
@@ -3443,7 +3444,11 @@
     "ariaLabel": "미디어 미리보기",
     "close": "닫기",
     "prev": "이전",
-    "next": "다음"
+    "next": "다음",
+    "actualSize": "1:1 원본 크기",
+    "fit": "화면 맞춤",
+    "reset": "초기화",
+    "rotateCw": "시계방향 회전"
   },
   "mobile": {
     "startupFailed": "HanaAgent 시작에 실패했어요",

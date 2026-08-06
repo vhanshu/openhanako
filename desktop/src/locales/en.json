@@ -299,6 +299,7 @@
     "screenshotSaved": "Screenshot saved under \"OH-Works\" in your working directory",
     "screenshotSavedMultiple": "Saved {count} screenshot segments under \"OH-Works\" in your working directory",
     "screenshotFailed": "Screenshot save failed",
+    "screenshotWebOnly": "Screenshot is only available on the desktop app. Please use the desktop version.",
     "selectedCount": "{count} selected",
     "allDone": "All done",
     "markAllComplete": "Mark all as complete",
@@ -3442,7 +3443,11 @@
     "ariaLabel": "Media preview",
     "close": "Close",
     "prev": "Previous",
-    "next": "Next"
+    "next": "Next",
+    "actualSize": "1:1 actual size",
+    "fit": "Fit to screen",
+    "reset": "Reset",
+    "rotateCw": "Rotate right"
   },
   "action": {
     "retry": "Retry"

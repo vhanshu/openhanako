@@ -29,20 +29,15 @@ describe('MediaViewer interaction', () => {
     expect(useStore.getState().mediaViewer).toBeNull();
   });
 
-  it('点击遮罩关闭', () => {
+  it('点击遮罩 / 舞台空白不再关闭，只有点 X 才关', () => {
     useStore.getState().setMediaViewer({ files: [f('a')], currentId: 'a', origin: 'desk' });
     const { getByTestId } = render(<MediaViewer />);
     fireEvent.click(getByTestId('media-viewer-overlay'));
-    expect(useStore.getState().mediaViewer).toBeNull();
-  });
-
-  it('点击舞台空白区域关闭，点击图片舞台不关闭', () => {
-    useStore.getState().setMediaViewer({ files: [f('a')], currentId: 'a', origin: 'desk' });
-    const { getByTestId } = render(<MediaViewer />);
-    fireEvent.click(getByTestId('image-stage'));
     expect(useStore.getState().mediaViewer?.currentId).toBe('a');
     fireEvent.click(getByTestId('media-viewer-stage-wrap'));
-    expect(useStore.getState().mediaViewer).toBeNull();
+    expect(useStore.getState().mediaViewer?.currentId).toBe('a');
+    fireEvent.click(getByTestId('image-stage'));
+    expect(useStore.getState().mediaViewer?.currentId).toBe('a');
   });
 
   it('点击关闭按钮关闭', () => {

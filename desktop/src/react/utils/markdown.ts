@@ -12,9 +12,11 @@ import type Token from 'markdown-it/lib/token.mjs';
 import mk from '@traptitech/markdown-it-katex';
 import taskLists from 'markdown-it-task-lists';
 import 'katex/dist/katex.min.css';
+import 'highlight.js/styles/atom-one-dark.css';
 import { sanitizeMarkdownPreviewHtml } from './markdown-html-sanitizer';
 import { EXT_TO_KIND, extOfName, isImageOrSvgExt } from './file-kind';
 import { uniqueMarkdownHeadingId } from './markdown-document';
+import { highlightFence } from './markdown-highlight';
 
 type MarkdownItInstance = ReturnType<typeof markdownit>;
 type MarkdownRenderEnv = {
@@ -955,6 +957,7 @@ function applyMarkdownPlugins(md: MarkdownItInstance): void {
   md.use(trimAutoLinkifiedSuffixes);
   md.use(unwrapLocalFileAutoLinks);
   md.use(mermaidFences);
+  md.use(highlightCodeFences);
   md.use(markdownImageRenderer);
   md.use(markdownTableScrollWrapper);
 }
@@ -995,6 +998,31 @@ function mermaidFences(md: MarkdownItInstance): void {
       '<div class="mermaid-rendered"></div>',
       '</div>\n',
     ].join('');
+  };
+}
+
+/**
+ * 代码块语法高亮。
+ *
+ * mermaid 已经在 mermaidFences 里早返回；剩余的 fence 走 highlight.js。
+ * markdown-it 在 `html: false` 下已经把 token.content escape 过，所以这里再
+ * escape 是多余的，调用方直接拿原始 content 交给 highlightFence 即可。
+ */
+function highlightCodeFences(md: MarkdownItInstance): void {
+  const defaultFence = md.renderer.rules.fence
+    ?? ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
+
+  md.renderer.rules.fence = (tokens, idx, options, env, self) => {
+    const token = tokens[idx];
+    const lang = fenceLanguage(token.info);
+
+    const highlighted = lang ? highlightFence(token.content, token.info) : null;
+    if (!highlighted) {
+      return defaultFence(tokens, idx, options, env, self);
+    }
+
+    const codeClass = `hljs language-${highlighted.language}`;
+    return `<pre class="hljs" data-lang="${highlighted.language}"><code class="${codeClass}">${highlighted.html}</code></pre>\n`;
   };
 }
 

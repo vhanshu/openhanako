@@ -571,8 +571,8 @@ html[data-platform="linux"] .tb-toggle-right {
 }
 
 .md-content pre {
-    margin: var(--space-8) 0;
-    padding: var(--space-8) var(--space-16);
+    margin: var(--space-4) 0;
+    padding: var(--space-4) var(--space-6);
     overflow-x: auto;
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
@@ -590,16 +590,36 @@ html[data-platform="linux"] .tb-toggle-right {
 /* wrapper 内的 pre 外边距归零，由 wrapper 接管；顶部按工具栏高度留位 */
 .md-content .code-block-wrap > pre {
     margin: 0;
-    padding-top: calc(var(--code-block-toolbar-size) + var(--space-4));
+    padding-top: calc(var(--code-block-toolbar-size) + var(--space-2));
+}
+
+/* 代码块语言标签：renderCodeBlockToolbarHtml 创建 <span class="code-block-lang">作为 toolbar 的第一个子元素，
+   与 wrap/copy 按钮在同一 flex 容器里。 */
+.md-content pre.hljs[data-lang] {
+    tab-size: 4;
+    -moz-tab-size: 4;
+    max-height: 28rem;
+    overflow-y: auto;
+}
+.md-content .code-block-toolbar > .code-block-lang {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-transform: lowercase;
+    color: inherit;
+    opacity: 0.55;
+    padding: 0 var(--space-8) 0 var(--space-16);
+    pointer-events: none;
+    user-select: none;
 }
 
 .md-content .code-block-wrap .code-block-toolbar {
     position: absolute;
     top: 0;
-    right: 0;
+    right: 1rem;
     display: flex;
     align-items: center;
-    gap: 0;
     border-radius: 0 var(--radius-md) 0 var(--radius-sm);
     z-index: 1;
 }

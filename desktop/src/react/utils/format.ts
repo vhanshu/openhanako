@@ -199,9 +199,15 @@ function createToolbarButton(
   return button;
 }
 
-function createCodeBlockToolbar(doc: Document, labels: CodeBlockToolbarLabels): HTMLDivElement {
+function createCodeBlockToolbar(doc: Document, labels: CodeBlockToolbarLabels, lang?: string): HTMLDivElement {
   const toolbar = doc.createElement('div');
   toolbar.className = 'code-block-toolbar';
+  if (lang) {
+    const langEl = doc.createElement('span');
+    langEl.className = 'code-block-lang';
+    langEl.textContent = lang;
+    toolbar.appendChild(langEl);
+  }
   toolbar.append(
     createToolbarButton(doc, 'wrap', labels),
     createToolbarButton(doc, 'copy', labels),
@@ -220,9 +226,11 @@ function decorateCodeBlockElements(root: ParentNode, labels: CodeBlockToolbarLab
     const doc = pre.ownerDocument;
     const wrapper = doc.createElement('div');
     wrapper.className = 'code-block-wrap';
+    // 把 pre 上的 data-lang 读出来，作为 toolbar 的第一个子元素（与 wrap/copy 同组件）
+    const preLang = pre.getAttribute('data-lang');
     pre.parentNode.insertBefore(wrapper, pre);
     wrapper.appendChild(pre);
-    wrapper.appendChild(createCodeBlockToolbar(doc, labels));
+    wrapper.appendChild(createCodeBlockToolbar(doc, labels, preLang ?? undefined));
     wrappers.push(wrapper);
   }
   return wrappers;
