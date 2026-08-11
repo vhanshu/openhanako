@@ -71,7 +71,7 @@ describe("shouldPruneRuntimeDeadFile", () => {
 });
 
 describe("pruneRuntimeDeadFiles", () => {
-  it("deletes runtime dead files, keeps protected/runtime files, and removes emptied directories", () => {
+  it("deletes runtime dead files, keeps protected/runtime files, and removes emptied directories", async () => {
     const root = makeTempDir();
     const nmDir = path.join(root, "node_modules");
 
@@ -95,7 +95,7 @@ describe("pruneRuntimeDeadFiles", () => {
     fs.writeFileSync(path.join(nestedPkg, "README.md"), "# vendored-dep\n");
     fs.writeFileSync(path.join(nestedPkg, "notes.mts"), "export const x = 1;\n");
 
-    const result = pruneRuntimeDeadFiles(nmDir);
+    const result = await pruneRuntimeDeadFiles(nmDir);
 
     // dead files gone
     expect(fs.existsSync(path.join(pkgA, "index.js.map"))).toBe(false);
@@ -114,6 +114,9 @@ describe("pruneRuntimeDeadFiles", () => {
 
     // removedFiles count: index.js.map, types.d.ts, README.md, notes.mts = 4
     expect(result.removedFiles).toBe(4);
-    expect(result.removedSize).toBeGreaterThan(0);
+    // removedSize is now always 0 — tracking per-file size required an
+    // extra statSync per delete, which dominated the prune cost on Windows.
+    expect(result.removedSize).toBe(0);
+    expect(result.cached).toBe(false);
   });
 });

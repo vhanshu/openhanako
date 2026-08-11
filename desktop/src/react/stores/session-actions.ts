@@ -195,7 +195,7 @@ function shouldRestoreInputFocus(path: string | null): boolean {
   } else if (state.pendingNewSession !== true || state.currentSessionPath !== null || state.pendingSessionSwitchPath) {
     return false;
   }
-  if (state.settingsModal?.open || state.mediaViewer || state.skillViewerData || state.channelCreateOverlayVisible) return false;
+  if (state.settingsModal?.open || state.mediaViewer || state.skillViewerData || state.toolInspector || state.channelCreateOverlayVisible) return false;
   if (path && computerOverlayForSession(state as any, path)) return false;
   return true;
 }

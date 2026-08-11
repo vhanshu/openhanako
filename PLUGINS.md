@@ -1,3 +1,14 @@
+---
+cover:
+  image: 文本附件/PLUGINS-cover-20260810-155522.jpg
+  actualRatio: '16:9'
+  pixelWidth: 2000
+  pixelHeight: 1125
+  displayWidth: 100
+  displayHeight: 320
+  positionX: 50
+  positionY: 50
+---
 # 社区插件开发指南
 
 > 本文档面向社区开发者，描述如何开发用户可安装的插件。

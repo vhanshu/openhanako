@@ -93,6 +93,7 @@ export function resolveFileRefPreviewAccess(
 }
 
 export function canPreviewFileRef(file: FileRef, context: ResourceAccessContext = {}): boolean {
+  if (file.status === 'expired') return false;
   return resolveFileRefPreviewAccess(file, context).mode !== 'unsupported';
 }
 

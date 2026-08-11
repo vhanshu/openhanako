@@ -182,7 +182,6 @@ function createToolbarButton(
   button.dataset.codeBlockAction = action;
 
   if (action === 'wrap') {
-    button.title = labels.wordWrap;
     button.setAttribute('aria-label', labels.wordWrap);
     button.setAttribute('aria-pressed', 'false');
     button.dataset.active = 'false';
@@ -190,7 +189,6 @@ function createToolbarButton(
     return button;
   }
 
-  button.title = labels.copy;
   button.setAttribute('aria-label', labels.copy);
   button.dataset.copied = 'false';
   button.dataset.copiedLabel = labels.copied;
@@ -276,11 +274,9 @@ export function injectCopyButtons(container: HTMLElement): void {
       const text = code ? code.textContent : pre.textContent;
       navigator.clipboard.writeText(text || '').then(() => {
         copyBtn.dataset.copied = 'true';
-        copyBtn.title = labels.copied;
         copyBtn.setAttribute('aria-label', labels.copied);
         setTimeout(() => {
           copyBtn.dataset.copied = 'false';
-          copyBtn.title = labels.copy;
           copyBtn.setAttribute('aria-label', labels.copy);
         }, 1500);
       });

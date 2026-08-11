@@ -37,6 +37,7 @@ function _getHljs() {
     const aliases = { cs: languages.csharp, toml: languages.ini };
     for (const name of Object.keys(languages)) hljs.registerLanguage(name, languages[name]);
     for (const [name, fn] of Object.entries(aliases)) hljs.registerLanguage(name, fn);
+    hljs.configure({ ignoreUnescapedHTML: true });
     _hljs = hljs;
     return _hljs;
   } catch {
@@ -79,12 +80,12 @@ function highlightScreenshotFence(content, info) {
   const target = LANG_ALIASES[rawLang];
   if (target && hljs.getLanguage(target)) {
     try {
-      const result = hljs.highlight(content, { language: target, ignoreUnescapedHTML: true });
+      const result = hljs.highlight(content, { language: target, ignoreIllegals: true });
       return { html: result.value, language: target };
     } catch { /* fall through */ }
   }
   try {
-    const result = hljs.highlightAuto(content, { ignoreUnescapedHTML: true });
+    const result = hljs.highlightAuto(content);
     if (result.language && result.language !== "plaintext") {
       return { html: result.value, language: result.language };
     }

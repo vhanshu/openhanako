@@ -255,11 +255,11 @@ const ContentBlockView = memo(function ContentBlockView({ block, agentName, agen
 }) {
   switch (block.type) {
     case 'thinking':
-      return <ThinkingBlock content={block.content} sealed={block.sealed} />;
+      return <ThinkingBlock content={block.content} sealed={block.sealed} sessionPath={sessionPath} />;
     case 'mood':
-      return <MoodBlock yuan={block.yuan} text={block.text} />;
+      return <MoodBlock yuan={block.yuan} text={block.text} sessionPath={sessionPath} />;
     case 'tool_group':
-      return <ToolGroupBlock tools={block.tools} collapsed={block.collapsed} agentName={agentName} />;
+      return <ToolGroupBlock tools={block.tools} collapsed={block.collapsed} agentName={agentName} sessionPath={sessionPath} />;
     case 'text':
       return <StreamingMarkdownContent html={block.html} source={block.source} active={isStreaming} linkContext={{ origin: 'session', sessionPath, messageId, blockIdx }} />;
     case 'file':
@@ -385,8 +385,35 @@ interface FileBlockCtx {
   blockIdx: number;
 }
 
+/**
+ * 本机文件存在性检查。文件不存在 / 不可访问时，调用 onExpired 标本地
+ * expired 状态（后续 ChatResourceCard 整卡置灰、工具栏除复制路径外禁用、
+ * 双击 / 单击 不再打开预览），返回 false。文件可用或 pathExists API
+ * 不可用时返回 true（容错，不阻塞原本正常的预览）。
+ */
+async function assertFileAvailable(filePath: string, onExpired: () => void): Promise<boolean> {
+  if (!filePath) return false;
+  const check = window.platform?.pathExists;
+  if (typeof check !== 'function') return true;
+  let exists = false;
+  try {
+    exists = !!(await check(filePath));
+  } catch {
+    exists = false;
+  }
+  if (!exists) {
+    onExpired();
+    return false;
+  }
+  return true;
+}
+
 const ImageOutputCard = memo(function ImageOutputCard({ fileId, filePath, label, ext, status, ctx }: { fileId?: string; filePath: string; label: string; ext: string; status?: string; ctx: FileBlockCtx }) {
   const [failed, setFailed] = useState(false);
+  // 本地 stat 检查发现文件不可用时调 setLocalExpired；prop status 本身也可能已 expired。
+  // 任一为真都让整张卡置灰（不可双击）、走 FileOutputCard 的 expired 形态。
+  const [localExpired, setLocalExpired] = useState<boolean>(status === 'expired');
+  const expired = localExpired || status === 'expired';
   const displayName = label || filePath.split('/').pop() || filePath;
   const imageSrc = useStore(useCallback((state) => {
     const files = selectSessionFiles(state, ctx.sessionPath);
@@ -427,21 +454,26 @@ const ImageOutputCard = memo(function ImageOutputCard({ fileId, filePath, label,
     }
   }, [fileId, filePath, displayName]);
 
-  if (status === 'expired') return <FileOutputCard filePath={filePath} label={label} ext={ext} status={status} ctx={ctx} />;
+  if (expired) return <FileOutputCard filePath={filePath} label={label} ext={ext} status={status} ctx={ctx} />;
   if (failed) return <FileOutputCard filePath={filePath} label={label} ext={ext} status={status} ctx={ctx} />;
+
+  const handleClick = async () => {
+    if (!(await assertFileAvailable(filePath, () => setLocalExpired(true)))) return;
+    openFilePreview(filePath, label, ext, {
+      origin: 'session',
+      sessionPath: ctx.sessionPath,
+      messageId: ctx.messageId,
+      fileId,
+      blockIdx: ctx.blockIdx,
+    });
+  };
 
   return (
     <div
       className={styles.imageOutputCard}
       draggable
       onDragStart={handleDragStart}
-      onClick={() => openFilePreview(filePath, label, ext, {
-        origin: 'session',
-        sessionPath: ctx.sessionPath,
-        messageId: ctx.messageId,
-        fileId,
-        blockIdx: ctx.blockIdx,
-      })}
+      onClick={handleClick}
       style={{ cursor: 'default' }}
     >
       {downloadUrl && (
@@ -470,6 +502,8 @@ const ImageOutputCard = memo(function ImageOutputCard({ fileId, filePath, label,
 
 const VideoOutputCard = memo(function VideoOutputCard({ fileId, filePath, label, ext, status, ctx }: { fileId?: string; filePath: string; label: string; ext: string; status?: string; ctx: FileBlockCtx }) {
   const [failed, setFailed] = useState(false);
+  const [localExpired, setLocalExpired] = useState<boolean>(status === 'expired');
+  const expired = localExpired || status === 'expired';
   const displayName = label || filePath.split('/').pop() || filePath;
   const videoSrc = useStore(useCallback((state) => {
     const files = selectSessionFiles(state, ctx.sessionPath);
@@ -510,8 +544,19 @@ const VideoOutputCard = memo(function VideoOutputCard({ fileId, filePath, label,
     }
   }, [fileId, filePath, displayName]);
 
-  if (status === 'expired') return <FileOutputCard filePath={filePath} label={label} ext={ext} status={status} ctx={ctx} />;
+  if (expired) return <FileOutputCard filePath={filePath} label={label} ext={ext} status={status} ctx={ctx} />;
   if (failed) return <FileOutputCard filePath={filePath} label={label} ext={ext} status={status} ctx={ctx} />;
+
+  const handleClick = async () => {
+    if (!(await assertFileAvailable(filePath, () => setLocalExpired(true)))) return;
+    openFilePreview(filePath, label, ext, {
+      origin: 'session',
+      sessionPath: ctx.sessionPath,
+      messageId: ctx.messageId,
+      fileId,
+      blockIdx: ctx.blockIdx,
+    });
+  };
 
   return (
     <div
@@ -519,13 +564,7 @@ const VideoOutputCard = memo(function VideoOutputCard({ fileId, filePath, label,
       data-testid="video-output-card"
       draggable
       onDragStart={handleDragStart}
-      onClick={() => openFilePreview(filePath, label, ext, {
-        origin: 'session',
-        sessionPath: ctx.sessionPath,
-        messageId: ctx.messageId,
-        fileId,
-        blockIdx: ctx.blockIdx,
-      })}
+      onClick={handleClick}
       style={{ cursor: 'default' }}
       aria-label={displayName}
     >
@@ -605,7 +644,8 @@ function buildFallbackSessionFileRef({
 }
 
 const FileOutputCard = memo(function FileOutputCard({ fileId, filePath, label, ext, status, ctx }: { fileId?: string; filePath: string; label: string; ext: string; status?: string; ctx: FileBlockCtx }) {
-  const expired = status === 'expired';
+  const [localExpired, setLocalExpired] = useState<boolean>(status === 'expired');
+  const expired = localExpired || status === 'expired';
   const expiredLabel = window.t('chat.fileExpired');
   const displayName = label || filePath.split('/').pop() || filePath;
   const downloadUrl = useSessionFileDownloadUrl({
@@ -616,8 +656,9 @@ const FileOutputCard = memo(function FileOutputCard({ fileId, filePath, label, e
     kind: 'other',
     ctx,
   });
-  const handlePreview = () => {
+  const handlePreview = async () => {
     if (expired) return;
+    if (!(await assertFileAvailable(filePath, () => setLocalExpired(true)))) return;
     openFilePreview(filePath, label, ext, {
       origin: 'session',
       sessionPath: ctx.sessionPath,
@@ -639,12 +680,13 @@ const FileOutputCard = memo(function FileOutputCard({ fileId, filePath, label, e
       disabled={expired}
       onClick={expired ? undefined : handlePreview}
       ariaLabel={displayName}
-      actionSlot={!expired && (
+      actionSlot={(
         <FileOutputActions
           filePath={filePath}
           displayName={displayName}
           downloadUrl={downloadUrl}
           downloadName={displayName}
+          disabled={expired}
         />
       )}
     />

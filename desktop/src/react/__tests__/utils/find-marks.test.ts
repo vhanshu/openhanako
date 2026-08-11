@@ -65,4 +65,39 @@ describe('find-marks', () => {
     expect(applyFindMarks(root, [], 'x')).toEqual([]);
     expect(() => clearFindMarks(null, 'x')).not.toThrow();
   });
+
+  it('activeNeedles：mark 上 data-needle 在 activeNeedles 集合内才标 activeClass', () => {
+    // 文本含 1 个独立 "go"（"go lang"）+ 2 个 "go mod" 整串 → total 3 个 mark
+    const root = document.createElement('div');
+    root.innerHTML = '<p>go lang.org go mod tidy go mod init</p>';
+    const marks = applyFindMarks(root, ['go mod', 'go'], 'x-mark', {
+      activeNeedles: ['go mod'],
+      activeClass: 'x-mark-active',
+    });
+    expect(marks.length).toBe(3);
+    const active = marks.filter((m) => m.classList.contains('x-mark-active'));
+    expect(active.length).toBe(2);
+    expect(active.every((m) => m.dataset.needle === 'go mod')).toBe(true);
+    const inactive = marks.filter((m) => !m.classList.contains('x-mark-active'));
+    expect(inactive.length).toBe(1);
+    expect(inactive[0].dataset.needle).toBe('go');
+  });
+
+  it('每个 mark 都带 data-needle 属性记录其命中字符串', () => {
+    const root = document.createElement('div');
+    root.innerHTML = '<p>hello world</p>';
+    const marks = applyFindMarks(root, ['hello', 'world'], 'x-mark');
+    expect(marks.length).toBe(2);
+    expect(marks[0].dataset.needle).toBe('hello');
+    expect(marks[1].dataset.needle).toBe('world');
+  });
+
+  it('activeNeedles / activeClass 任一缺失则不标 active', () => {
+    const root = document.createElement('div');
+    root.innerHTML = '<p>abc</p>';
+    const marks = applyFindMarks(root, ['abc'], 'x-mark', { activeNeedles: ['abc'] });
+    expect(marks[0].classList.contains('x-mark-active')).toBe(false);
+    const marks2 = applyFindMarks(root, ['abc'], 'x-mark', { activeClass: 'x-mark-active' });
+    expect(marks2[0].classList.contains('x-mark-active')).toBe(false);
+  });
 });

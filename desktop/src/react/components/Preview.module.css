@@ -523,6 +523,21 @@
     opacity: 0.85;
 }
 
+.previewPanelBody :global(.preview-file-info[data-expired='true']) .preview-file-icon,
+.previewPanelBody :global(.preview-file-info[data-expired='true']) .preview-file-name {
+    opacity: 0.55;
+    color: var(--text-muted);
+}
+
+.previewPanelBody :global(.preview-file-expired-label) {
+    margin-top: var(--space-8);
+    padding: var(--space-6) var(--space-16);
+    border-radius: var(--radius-md, 6px);
+    background: var(--overlay-light, rgba(120, 120, 120, 0.12));
+    color: var(--text-muted);
+    font-size: var(--fs-body);
+}
+
 /* ── Preview 编辑器（CodeMirror 6）── */
 
 :global(.preview-editor) {
@@ -761,19 +776,40 @@
 }
 
 :global(.preview-editor .cm-gutters) {
-    background: transparent;
+    background: var(--panel-card-bg);
     border-right: 1px solid var(--overlay-light);
     color: var(--text-muted);
     font-size: var(--fs-caption);
+    padding-right: var(--space-6);
 }
 
 :global(.preview-editor .cm-activeLineGutter) {
-    background: transparent;
+    background: var(--overlay-subtle);
     color: var(--text);
+}
+
+/* CM 在 .cm-scroller 这个 flex 容器里 .cm-content 默认只到内容宽度（不横向拉伸）。
+   强制 width: max-content 让 .cm-content 按最宽行自身宽度展开，
+   这样 .cm-line 也就跟到横向最宽处，active 行高亮就能覆盖完整内容宽度（含横滚动区）。
+   仅作用于 code 模式：markdown/csv 走各自 theme 的居中 + max-width 排版，不需要这个。 */
+:global(.preview-editor.mode-code .cm-content) {
+    width: max-content;
+    min-width: 100%;
+}
+
+/* code 模式开启 wrap 后：避免长 token（无空格连续字符串）推出横滚条。
+   切回 width: 100% 让内容 fit 进可视区，再用 word-break / overflow-wrap 允许在任意字符边界断行。 */
+:global(.preview-editor.mode-code[data-wrap="true"] .cm-content) {
+    width: 100%;
+    min-width: 0;
+    word-break: break-all;
+    overflow-wrap: anywhere;
 }
 
 :global(.preview-editor .cm-activeLine) {
     background: var(--overlay-subtle);
+    width: 100%;
+    display: block;
 }
 
 :global(.preview-editor .cm-selectionBackground) {
@@ -877,6 +913,16 @@
 
 :global(.cm-codeblock-line) {
     background: var(--overlay-light);
+    /* 默认不换行：CM 本身 pre-wrap，长串会被 max-width 折成多行（看似自动换行）。
+       点 wrap 按钮后该 line 加 data-wrap="true"，切到 pre-wrap。 */
+    white-space: pre;
+    overflow-x: auto;
+}
+
+:global(.cm-codeblock-line[data-wrap="true"]) {
+    white-space: pre-wrap;
+    word-break: break-all;
+    overflow-x: hidden;
 }
 
 :global(.cm-codeblock-line-first) {
@@ -918,17 +964,18 @@
     user-select: none;
 }
 
+:global(.cm-codeblock-wrap-btn),
 :global(.cm-codeblock-copy-btn) {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: var(--space-4);
     position: relative;
-    width: 2rem;
+    width: 1.6rem;
     min-height: 24px;
     padding: 0;
     border: 0;
-    border-radius: 0 var(--radius-sm) 0 var(--radius-sm);
+    border-radius: 0;
     background: transparent;
     color: var(--text-muted);
     font-family: var(--font-ui);
@@ -941,6 +988,13 @@
         color var(--duration-fast) var(--ease-out);
 }
 
+:global(.cm-codeblock-copy-btn) {
+    border-radius: 0 var(--radius-sm) 0 var(--radius-sm);
+}
+
+:global(.cm-codeblock-wrap-btn:hover),
+:global(.cm-codeblock-wrap-btn:focus-visible),
+:global(.cm-codeblock-wrap-btn[data-active="true"]),
 :global(.cm-codeblock-copy-btn:hover),
 :global(.cm-codeblock-copy-btn:focus-visible),
 :global(.cm-codeblock-copy-btn[data-copied="true"]) {
@@ -948,30 +1002,11 @@
     color: var(--accent);
 }
 
+:global(.cm-codeblock-wrap-icon),
 :global(.cm-codeblock-copy-icon) {
     width: 13px;
     height: 13px;
     flex: 0 0 auto;
-}
-
-:global(.cm-codeblock-copy-label) {
-    position: absolute;
-    top: 50%;
-    right: calc(100% + var(--space-4));
-    transform: translateY(-50%);
-    padding: 0.1rem 0.35rem;
-    border-radius: var(--radius-sm);
-    background: var(--bg-glass, var(--bg-card));
-    color: var(--accent);
-    font-size: var(--fs-hint);
-    white-space: nowrap;
-    pointer-events: none;
-    opacity: 0;
-    transition: opacity var(--duration-fast) var(--ease-out);
-}
-
-:global(.cm-codeblock-copy-btn[data-copied="true"] .cm-codeblock-copy-label) {
-    opacity: 1;
 }
 
 :global(.cm-image-widget) {

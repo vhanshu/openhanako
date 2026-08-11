@@ -5,14 +5,19 @@
  * 同步 fence rule 不兼容。代价：~30 种语言一次性进 bundle，gz 后约 30–50KB，
  * 对 Electron 桌面应用可以接受。
  *
- * fence 内容由 markdown-it 在 `html: false` 下提前 escape 过，所以高亮时必须
- * 开启 `ignoreUnescapedHTML`，否则 &lt; 会被再次 escape 成 &amp;lt;，显示成字面量。
+ * fence 内容由 markdown-it 在 `html: false` 下提前 escape 过，里面含 &lt; &amp;
+ * 等实体；全局开启 `ignoreUnescapedHTML` 避免 hljs 把它当成未转义 HTML 报
+ * illegal。注意 `ignoreUnescapedHTML` 是 `HLJSOptions` 字段（全局 configure 用），
+ * 不是 `HighlightOptions` 字段（单次调用），所以放 configure 里。
+ *
+ * 单次调用再用 `ignoreIllegals: true` 兜底其他可能的语法异常。
  *
  * 截图线（src/shared/screenshot-markdown.cjs）是 CommonJS，不能直接复用本文件；
  * 那里会维护一份语义相同的语言别名表与高亮函数。
  */
 
 import hljs from 'highlight.js/lib/core';
+import type { LanguageFn } from 'highlight.js';
 import typescript from 'highlight.js/lib/languages/typescript';
 import javascript from 'highlight.js/lib/languages/javascript';
 import json from 'highlight.js/lib/languages/json';
@@ -42,7 +47,7 @@ import dart from 'highlight.js/lib/languages/dart';
 import diff from 'highlight.js/lib/languages/diff';
 
 // 注册到 hljs 的语言集合。key 是 highlight.js 内部名，value 是 grammar 函数。
-const HLJS_LANGUAGES: Record<string, hljs.LanguageFn> = {
+const HLJS_LANGUAGES: Record<string, LanguageFn> = {
   typescript,
   javascript,
   json,
@@ -137,6 +142,7 @@ function ensureRegistered(): void {
   for (const [name, fn] of Object.entries(HLJS_LANGUAGES)) {
     hljs.registerLanguage(name, fn);
   }
+  hljs.configure({ ignoreUnescapedHTML: true });
   registered = true;
 }
 
@@ -156,7 +162,7 @@ export function highlightFence(content: string, info: string): { html: string; l
   const target = LANG_ALIASES[rawLang];
   if (target && HLJS_LANGUAGES[target]) {
     try {
-      const result = hljs.highlight(content, { language: target, ignoreUnescapedHTML: true });
+      const result = hljs.highlight(content, { language: target, ignoreIllegals: true });
       return { html: result.value, language: target };
     } catch {
       /* fall through */
@@ -165,7 +171,9 @@ export function highlightFence(content: string, info: string): { html: string; l
 
   // 别名表未命中，或指定语言未注册 —— 自动检测兜底
   try {
-    const result = hljs.highlightAuto(content, { ignoreUnescapedHTML: true });
+    // highlightAuto 签名是 (code, languageSubset?: string[])，第二个参数是白名单
+    // 不是 options；之前误传的 ignoreUnescapedHTML 是无效字段。
+    const result = hljs.highlightAuto(content);
     if (result.language && result.language !== 'plaintext') {
       return { html: result.value, language: result.language };
     }

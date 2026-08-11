@@ -713,9 +713,9 @@
       "failed": "💻 {name} 電腦沒聽話"
     },
     "read": {
-      "running": "📖 {name} 正在翻閱檔案",
-      "done": "📖 {name} 翻完了",
-      "failed": "📖 {name} 沒翻到"
+      "running": "📖 {name} 正在讀檔案",
+      "done": "📖 {name} 讀完了",
+      "failed": "📖 {name} 沒讀到"
     },
     "write": {
       "running": "✏️ {name} 提筆寫字中",
@@ -3357,6 +3357,13 @@
       "saveImage": "保存图片",
       "regenerateWithPrompt": "自定义提示词生成图片",
       "deleteCover": "删除封面"
+    },
+    "wordWrap": "自動換行",
+    "html": {
+      "zoomIn": "放大",
+      "zoomOut": "縮小",
+      "edit": "編輯",
+      "preview": "預覽"
     }
   },
   "subagent": {

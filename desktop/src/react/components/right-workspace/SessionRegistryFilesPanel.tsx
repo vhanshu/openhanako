@@ -231,6 +231,23 @@ function SortIcon() {
   );
 }
 
+function ExpiredBadgeIcon() {
+  // 红色三角警告：贴在文件图标右下角，表示本机文件不可访问（expired / missing）。
+  // 比 status label 更显眼，即使不 hover 也能一眼看到。
+  return (
+    <svg
+      className={styles.fileIconExpiredBadge}
+      width="8"
+      height="8"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <path d="M12 2L1 21h22L12 2zm0 4.5L19.5 19h-15L12 6.5zM11 11v4h2v-4h-2zm0 6v2h2v-2h-2z" />
+    </svg>
+  );
+}
+
 function ActionIcon({ type }: { type: 'preview' | 'open' | 'reveal' | 'copy' | 'download' }) {
   if (type === 'preview') {
     return (
@@ -318,6 +335,7 @@ function SessionFileRow({
       data-session-file-row=""
       data-file-id={file.id}
       data-selected={selected ? 'true' : 'false'}
+      data-expired={isExpired(file) ? 'true' : 'false'}
       role="listitem"
       draggable={canDrag}
       onClick={handleClick}
@@ -327,9 +345,10 @@ function SessionFileRow({
     >
       <div className={styles.fileIcon} aria-hidden="true">
         <FileKindIcon kind={file.kind} size={16} />
+        {isExpired(file) && <ExpiredBadgeIcon />}
       </div>
       <div className={styles.fileMain}>
-        <div className={styles.fileName} data-testid="session-file-name" title={file.name}>{file.name}</div>
+        <div className={styles.fileName} data-testid="session-file-name" title={isExpired(file) ? tr('rightWorkspace.sessionFiles.expiredTooltip') : file.name}>{file.name}</div>
         <div className={styles.fileMeta}>
           <span>{sourceLabel(file)}</span>
           <span>{formatKind(file)}</span>
@@ -376,13 +395,21 @@ function SessionFileRow({
         )}
         {downloadUrl && (
           <a
-            className={styles.fileAction}
+            className={`${styles.fileAction}${isExpired(file) ? ` ${styles.fileActionDisabled}` : ''}`}
             data-session-file-action=""
             aria-label={actionLabel('rightWorkspace.sessionFiles.actions.downloadToDevice', file)}
             title={actionLabel('rightWorkspace.sessionFiles.actions.downloadToDevice', file)}
-            href={downloadUrl}
+            aria-disabled={isExpired(file) || undefined}
+            href={isExpired(file) ? undefined : downloadUrl}
             download={file.name}
-            onClick={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              if (isExpired(file)) {
+                event.preventDefault();
+                event.stopPropagation();
+                return;
+              }
+              event.stopPropagation();
+            }}
           >
             <ActionIcon type="download" />
           </a>

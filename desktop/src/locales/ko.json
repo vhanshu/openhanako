@@ -3357,6 +3357,13 @@
       "saveImage": "이미지 저장",
       "regenerateWithPrompt": "사용자 지정 프롬프트로 이미지 생성",
       "deleteCover": "커버 삭제"
+    },
+    "wordWrap": "자동 줄 바꿈",
+    "html": {
+      "zoomIn": "확대",
+      "zoomOut": "축소",
+      "edit": "편집",
+      "preview": "미리보기"
     }
   },
   "subagent": {

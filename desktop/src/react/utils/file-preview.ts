@@ -124,9 +124,24 @@ export async function openFilePreview(
         openPreview(previewItem);
         return;
       }
+      // readFileForPreviewWithVersion 失败：对文本可预览扩展名，意味着 readFileSnapshot
+      // 返 null（文件不存在 / 重命名 / 被删除）。直接走 file-info 并标 expired。
+      const previewItem: PreviewItem = {
+        id: `file-${filePath}`,
+        type: 'file-info',
+        title: fileName,
+        content: '',
+        filePath,
+        ext: normalizedExt,
+        status: 'expired',
+        missingAt: Date.now(),
+      };
+      openPreview(previewItem);
+      return;
     }
 
-    // 无法预览的文件类型
+    // canPreview=false：扩展名本身就不在预览范围内（如 .exe / .zip）。文件本身可能有效，
+    // 仅是不能在面板内联预览，仍由“用默认应用打开”按钮负责，不该误标 expired。
     const previewItem: PreviewItem = {
       id: `file-${filePath}`,
       type: 'file-info',

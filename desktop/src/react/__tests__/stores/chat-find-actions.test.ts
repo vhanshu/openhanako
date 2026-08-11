@@ -19,7 +19,10 @@ function findResponse(body: any, ok = true) {
 
 const SAMPLE = {
   query: 'x', total: 2, bestIndex: 9, tokens: ['x'], truncated: false, revision: 'r1',
-  matches: [{ index: 3, exact: false, snippet: 'a' }, { index: 9, exact: true, snippet: 'b' }],
+  matches: [
+    { index: 3, exact: false, snippet: 'a', needles: ['x'] },
+    { index: 9, exact: true, snippet: 'b', needles: ['x'] },
+  ],
 };
 
 describe('chat-find-actions', () => {

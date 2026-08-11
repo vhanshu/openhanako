@@ -1648,6 +1648,19 @@
     outline-offset: -2px;
 }
 
+.fileOutputActionButton:disabled,
+.fileOutputActionButton[aria-disabled="true"] {
+    color: var(--text-muted);
+    cursor: not-allowed;
+    opacity: 0.45;
+}
+
+.fileOutputActionButton:disabled:hover,
+.fileOutputActionButton[aria-disabled="true"]:hover {
+    background: transparent;
+    color: var(--text-muted);
+}
+
 .fileOutputActionPrimary {
     width: 31px;
 }
@@ -1688,6 +1701,18 @@
 .fileOutputActionMenuItem:focus-visible {
     background: var(--overlay-subtle);
     outline: none;
+}
+
+.fileOutputActionMenuItem:disabled,
+.fileOutputActionMenuItem[aria-disabled="true"] {
+    color: var(--text-muted);
+    cursor: not-allowed;
+    opacity: 0.45;
+}
+
+.fileOutputActionMenuItem:disabled:hover,
+.fileOutputActionMenuItem[aria-disabled="true"]:hover {
+    background: transparent;
 }
 
 /* ── 媒体生成占位卡片 ── */
@@ -2280,25 +2305,43 @@
     }
 }
 
-/* 查找定位：目标消息一次性强调（duration 由 token 派生：0.25s × 6.4 = 1.6s） */
+/* 查找定位：目标消息一次性强调（duration 由 token 派生：0.25s × 2.4 = 0.6s） */
 .locateFlash {
     animation-name: locate-flash;
-    animation-duration: calc(var(--duration-slow) * 6.4);
+    animation-duration: calc(var(--duration-slow) * 2.4);
     animation-timing-function: var(--ease-out);
     animation-iteration-count: 1;
 }
 
 @keyframes locate-flash {
-    0% { background-color: color-mix(in srgb, var(--accent) 28%, transparent); }
-    100% { background-color: transparent; }
+    0% {
+        background-color: color-mix(in srgb, var(--accent) 70%, transparent);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 60%, transparent);
+    }
+    60% {
+        background-color: color-mix(in srgb, var(--accent) 55%, transparent);
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+    }
+    100% {
+        background-color: transparent;
+        box-shadow: 0 0 0 0 transparent;
+    }
 }
 
 /* 查找词高亮（JS 创建的原生 mark，走全局类；样式对齐 preview-find-mark） */
 :global(mark.chat-find-mark) {
     border-radius: 2px;
-    background-color: color-mix(in srgb, var(--accent) 28%, transparent);
+    background-color: color-mix(in srgb, var(--accent) 38%, transparent);
     color: inherit;
     padding: 0;
+}
+
+/* 当前 active 命中：颜色更深 + 1px 描边作视觉锚点；
+   JS 在该消息容器内的所有 mark 上加 chat-find-mark-active 类（一条消息
+   可能命中多个 term，全部标 active；用户感知上是"这条消息被选中"）。 */
+:global(mark.chat-find-mark-active) {
+    background-color: color-mix(in srgb, var(--accent) 70%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 75%, transparent);
 }
 
 /* ── 会话内查找条宿主 ──
@@ -2309,4 +2352,319 @@
    时为 position:relative，与本组件的渲染条件一致），故顶右偏移天然锚定到消息区域。 */
 .chatFindBarHost {
     position: relative;
+}
+
+/* ── 工具调用详情 inspector ── */
+
+.toolInspectorOverlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9000;
+    background: var(--overlay-medium);
+    backdrop-filter: blur(2px);
+    display: flex;
+    justify-content: flex-end;
+}
+
+.toolInspectorDrawer {
+    width: min(560px, 80vw);
+    max-width: 100%;
+    height: 100%;
+    background: var(--bg-card);
+    border-left: 1px solid var(--border);
+    box-shadow: -16px 0 32px rgba(0, 0, 0, 0.10);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    /* 顶栏留出 app titlebar 的高度 */
+    padding-top: var(--titlebar-height, 0px);
+    /* 抽屉内任何文本默认可被选中复制（顶栏按钮文字除外）。 */
+    user-select: text;
+    -webkit-user-select: text;
+}
+
+.toolInspectorDrawer .toolInspectorPre,
+.toolInspectorDrawer .toolInspectorMono,
+.toolInspectorDrawer .toolInspectorError,
+.toolInspectorDrawer .toolInspectorEmpty {
+    user-select: text;
+    -webkit-user-select: text;
+}
+
+.toolInspectorHeader {
+    flex-shrink: 0;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-16);
+    padding: var(--space-16) var(--space-24);
+    border-bottom: 1px solid var(--border);
+}
+
+.toolInspectorHeaderText {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    min-width: 0;
+}
+
+.toolInspectorEyebrow {
+    font-size: var(--fs-hint);
+    color: var(--text-muted);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.toolInspectorName {
+    margin: 0;
+    font-size: var(--fs-ui);
+    font-weight: 600;
+    font-family: var(--font-mono);
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.toolInspectorClose {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 1.4rem;
+    line-height: 1;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    transition: background-color var(--duration-fast) var(--ease-out),
+        color var(--duration-fast) var(--ease-out);
+}
+
+.toolInspectorClose:hover {
+    background: var(--overlay-light);
+    color: var(--text);
+}
+
+.toolInspectorMeta {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: var(--space-12) var(--space-24);
+    background: var(--tool-bg);
+    border-bottom: 1px solid var(--border);
+}
+
+.toolInspectorMetaRow {
+    display: flex;
+    align-items: center;
+    gap: var(--space-8);
+    font-size: var(--fs-caption);
+    min-width: 0;
+}
+
+.toolInspectorMetaKey {
+    flex-shrink: 0;
+    width: 5rem;
+    color: var(--text-muted);
+}
+
+.toolInspectorStatus {
+    font-size: var(--fs-hint);
+    padding: 0.05rem 0.5rem;
+    border-radius: 999px;
+    border: 1px solid transparent;
+}
+
+.toolInspectorStatusRunning {
+    color: var(--accent);
+    background: var(--accent-light);
+    border-color: var(--mood-border, transparent);
+}
+
+.toolInspectorStatusDone {
+    color: var(--green);
+    background: color-mix(in srgb, var(--green) 12%, transparent);
+}
+
+.toolInspectorStatusFailed {
+    color: var(--coral);
+    background: color-mix(in srgb, var(--coral) 12%, transparent);
+}
+
+.toolInspectorMono {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: var(--fs-hint);
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.toolInspectorPathButton {
+    /* 覆盖 button 默认外观，复用 monospace 代码样式 */
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+    text-align: left;
+    cursor: pointer;
+    color: var(--accent);
+    transition: color var(--duration-fast) var(--ease-out),
+        background-color var(--duration-fast) var(--ease-out);
+    border-radius: var(--radius-sm);
+    /* overflow: hidden 仍来自 .toolInspectorMono；这里补一点 padding 让 hover 区域更明显 */
+    padding-left: 0.3rem;
+    padding-right: 0.3rem;
+    margin-left: -0.3rem;
+    margin-right: -0.3rem;
+}
+
+.toolInspectorPathButton:hover {
+    color: var(--accent-hover);
+    background: var(--accent-light);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.toolInspectorPathButton:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+.toolInspectorError {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    margin-top: 0.2rem;
+}
+
+.toolInspectorBody {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--space-16) var(--space-24) var(--space-32);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-16);
+}
+
+.toolInspectorSection {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    min-width: 0;
+    position: relative;
+}
+
+.toolInspectorSectionHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-8);
+}
+
+.toolInspectorCopy {
+    flex-shrink: 0;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-muted);
+    font-size: var(--fs-hint);
+    padding: 0.1rem 0.5rem;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background-color var(--duration-fast) var(--ease-out),
+        color var(--duration-fast) var(--ease-out),
+        border-color var(--duration-fast) var(--ease-out);
+}
+
+.toolInspectorCopy:hover {
+    background: var(--overlay-light);
+    color: var(--text);
+    border-color: var(--accent);
+}
+
+.toolInspectorCopy:active {
+    transform: translateY(0.5px);
+}
+
+.toolInspectorSectionTitle {
+    margin: 0;
+    font-size: var(--fs-caption);
+    font-weight: 600;
+    color: var(--text-muted);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.toolInspectorPre {
+    margin: 0;
+    padding: var(--space-12);
+    background: var(--overlay-subtle);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: var(--fs-caption);
+    line-height: 1.55;
+    color: var(--text);
+    overflow-x: auto;
+    white-space: pre;
+    max-height: 50vh;
+    overflow-y: auto;
+    /* 默认 8 太宽会断对齐；代码块/JSON 里 tab 常见，设为 4。 */
+    tab-size: 4;
+    -moz-tab-size: 4;
+}
+
+.toolInspectorEmpty {
+    margin: 0;
+    padding: var(--space-12);
+    font-size: var(--fs-caption);
+    color: var(--text-muted);
+    background: var(--overlay-subtle);
+    border-radius: var(--radius-sm);
+    border: 1px dashed var(--border);
+}
+
+.toolInspectorMetaNote {
+    margin: 0;
+    margin-top: 0.4rem;
+    font-size: var(--fs-hint);
+    color: var(--text-muted);
+}
+
+.toolInspectorTooLarge {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.4rem;
+}
+
+.toolInspectorTooLarge p {
+    margin: 0;
+}
+
+/* 整行可点击的 toolIndicator：hover 加轻提示 */
+.toolIndicatorInteractive {
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    padding-left: 0.3rem;
+    padding-right: 0.3rem;
+    margin-left: -0.3rem;
+    margin-right: -0.3rem;
+    transition: background-color var(--duration-fast) var(--ease-out);
+    /* 重要：可点行里仍允许选中 detail 文本；点击事件不夺 selection。 */
+    user-select: text;
+    -webkit-user-select: text;
+}
+
+.toolIndicatorInteractive:hover {
+    background: var(--overlay-light);
+}
+
+.toolIndicatorInteractive:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
 }

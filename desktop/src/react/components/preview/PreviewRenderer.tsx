@@ -115,7 +115,7 @@ function MissingPreviewTarget({ previewItem }: { previewItem: PreviewItem }) {
 // HTML 内容由 server 注册为 token 化短期文档；右侧 Preview 只承载本地
 // artifact/file-backed HTML，用 DOM iframe 渲染，外部网页访问交给内置浏览器。
 
-function HtmlPreview({ previewItem }: { previewItem: PreviewItem }) {
+export function HtmlPreview({ previewItem, zoom = 1 }: { previewItem: PreviewItem; zoom?: number }) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -163,6 +163,7 @@ function HtmlPreview({ previewItem }: { previewItem: PreviewItem }) {
       src={previewUrl || 'about:blank'}
       sandbox="allow-scripts"
       referrerPolicy="no-referrer"
+      style={{ zoom }}
     />
   );
 }
@@ -689,9 +690,10 @@ function PdfPreview({ previewItem }: { previewItem: PreviewItem }) {
 function FileInfoPreview({ previewItem }: { previewItem: PreviewItem }) {
   const t = window.t ?? ((p: string) => p);
   const ext = previewItem.ext || '';
+  const expired = previewItem.status === 'expired';
 
   return (
-    <div className="preview-file-info">
+    <div className="preview-file-info" data-expired={expired ? 'true' : undefined}>
       <div
         className="preview-file-icon"
         dangerouslySetInnerHTML={{ __html: fileIconSvg(ext) }}
@@ -700,20 +702,26 @@ function FileInfoPreview({ previewItem }: { previewItem: PreviewItem }) {
       <div className="preview-file-ext">
         {ext.toUpperCase()} {t('desk.fileLabel')}
       </div>
-      <button
-        className="preview-file-open-btn"
-        onClick={() => {
-          if (previewItem.filePath) window.platform?.openFile?.(previewItem.filePath);
-        }}
-      >
-        {t('desk.openWithDefault')}
-      </button>
+      {expired ? (
+        <div className="preview-file-expired-label" role="status">
+          {t('chat.fileExpired')}
+        </div>
+      ) : (
+        <button
+          className="preview-file-open-btn"
+          onClick={() => {
+            if (previewItem.filePath) window.platform?.openFile?.(previewItem.filePath);
+          }}
+        >
+          {t('desk.openWithDefault')}
+        </button>
+      )}
     </div>
   );
 }
 
 // 代码预览：调 highlight.js 高亮（跟对话消息的代码块走同一个高亮函数）
-function CodePreview({ content, language }: { content: string; language?: string }) {
+function CodePreview({ content, language }: { content: string; language?: string | null }) {
   const highlighted = useMemo(() => {
     if (!language) return null;
     return highlightFence(content, language);

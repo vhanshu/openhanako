@@ -494,6 +494,88 @@ async function readNftTraceSource(filePath) {
   }).outputText;
 }
 
+
+/**
+ * Resolve the repo root by walking up from a starting directory looking for
+ * package-lock.json. Returns null if not found within maxLevels. Mirrors the
+ * helper in scripts/build-server-prune.mjs; duplicated here to keep the two
+ * cache sites independent (each builds a different cache key from different
+ * inputs and lives in a different .cache/ subdir).
+ */
+function findRepoLockfileForNft(startDir, maxLevels = 6) {
+  let dir = path.resolve(startDir);
+  for (let i = 0; i < maxLevels; i++) {
+    const candidate = path.join(dir, "package-lock.json");
+    if (fs.existsSync(candidate)) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+/**
+ * Cache the @vercel/nft trace result so that an unchanged input set
+ * (lockfile + version + nftRoots content) skips the multi-minute static
+ * analysis pass. fileList is the Set<string> of paths nft returns; we
+ * persist it as a sorted JSON array inside <repoRoot>/.cache/build-server-nft/.
+ * Marker file size is typically 200KB-1MB which reads back in well under
+ * 100ms, vs. the 3-4 minutes the trace itself takes on a real node_modules.
+ */
+function nftCacheDir(outDir) {
+  const lockfile = findRepoLockfileForNft(outDir);
+  if (!lockfile) return null;
+  const repoRoot = path.dirname(lockfile);
+  return path.join(repoRoot, ".cache", "build-server-nft");
+}
+
+function nftCacheKey({ version, nftRoots, outDir, externalPackageNames }) {
+  const hash = createHash("sha256");
+  hash.update(`version:${version}\0`);
+  // nftRoots are paths relative to outDir; hash their on-disk content so
+  // vite re-emitting bundle.js with identical content doesn't invalidate.
+  for (const root of nftRoots) {
+    const full = path.join(outDir, root);
+    try {
+      const stat = fs.statSync(full);
+      hash.update(`root:${root}:${stat.size}:${createHash("sha256").update(fs.readFileSync(full)).digest("hex")}\0`);
+    } catch {
+      // Missing entry file — fall back to mtime so we still invalidate on changes.
+      hash.update(`root:${root}:missing\0`);
+    }
+  }
+  // externalPackageNames affects which node_modules dirs are protected, not
+  // what nft traces, so it doesn't need to be in the key. included anyway
+  // for safety in case the protection logic gains a new dimension.
+  hash.update(`externals:${[...externalPackageNames].sort().join(",")}\0`);
+  return hash.digest("hex").slice(0, 32);
+}
+
+function readNftCacheMarker(cacheDir, cacheKey) {
+  const marker = path.join(cacheDir, `${cacheKey}.json`);
+  if (!fs.existsSync(marker)) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(marker, "utf8"));
+    if (Array.isArray(parsed.fileList) && typeof parsed.fileList[0] === "string") {
+      return { fileList: parsed.fileList };
+    }
+  } catch {
+    // Corrupt marker — treat as miss and recompute.
+  }
+  return null;
+}
+
+function writeNftCacheMarker(cacheDir, cacheKey, fileList) {
+  fs.mkdirSync(cacheDir, { recursive: true });
+  const marker = path.join(cacheDir, `${cacheKey}.json`);
+  const tmp = `${marker}.tmp`;
+  // fileList comes from nft as a Set<string>; serialize as sorted array for
+  // deterministic diffs and a stable on-disk shape.
+  const payload = { fileList: [...fileList].sort() };
+  fs.writeFileSync(tmp, JSON.stringify(payload));
+  fs.renameSync(tmp, marker);
+}
+
 /**
  * @vercel/nft-traces from `nftRoots` (relative to `outDir`) and deletes
  * every node_modules file that trace didn't reach, except files inside a
@@ -516,85 +598,135 @@ export async function pruneServerNodeModulesViaNft({
   runWithTargetNode,
   log = (msg) => console.log(msg),
 }) {
-  log("[build-server] running nft trace...");
-
-  const { nodeFileTrace } = await import("@vercel/nft");
-  const nmDir = path.join(outDir, "node_modules");
-  let fileList;
-  try {
-    ({ fileList } = await nodeFileTrace(
-      nftRoots.map((root) => path.join(outDir, root)),
-      {
-        base: outDir,
-        conditions: ["node", "import"],
-        // Bundled plugins remain as TypeScript source and are loaded through
-        // the plugin runtime. nft resolves .ts paths but its parser only
-        // accepts JavaScript syntax, so expose a read-only transpiled view for
-        // tracing while keeping the packaged files themselves unchanged.
-        readFile: readNftTraceSource,
-      },
-    ));
-  } catch (e) {
-    // Windows CI 上 nft 可能因用户目录不存在而报错，跳过裁剪
-    console.warn(`[build-server] nft trace failed (${e.message}), skipping prune`);
-    fileList = null;
-  }
-
-  if (fileList) {
-    const tracedFiles = new Set();
-    for (const f of fileList) {
-      tracedFiles.add(path.resolve(outDir, f));
-    }
-
-    const protectedDirs = new Set();
-    for (const packageName of externalPackageNames) {
-      const pkgDir = path.resolve(nmDir, packageName);
-      if (fs.existsSync(pkgDir)) {
-        protectedDirs.add(pkgDir);
-      }
-    }
-    for (const pkgDir of collectInstalledOptionalDependencyDirs(nmDir, externalPackageNames)) {
-      protectedDirs.add(pkgDir);
-    }
-
-    if (protectedDirs.size > 0) {
-      const names = [...protectedDirs].map((d) => path.relative(nmDir, d));
-      log(`[build-server] nft: protecting ${protectedDirs.size} server deps from pruning: ${names.join(", ")}`);
-    }
-
-    let removedFiles = 0;
-    let removedSize = 0;
-
-    function pruneDir(dir) {
-      let entries;
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-
-      for (const entry of entries) {
-        const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          if (protectedDirs.has(path.resolve(full))) continue;
-          pruneDir(full);
-          try {
-            const remaining = fs.readdirSync(full);
-            if (remaining.length === 0) fs.rmdirSync(full);
-          } catch {}
-        } else if (entry.isFile() || entry.isSymbolicLink()) {
-          if (!tracedFiles.has(full)) {
-            const size = entry.isFile() ? (fs.statSync(full).size || 0) : 0;
-            fs.unlinkSync(full);
-            removedFiles++;
-            removedSize += size;
-          }
-        }
-      }
-    }
-
-    pruneDir(nmDir);
-
-    const keptFiles = fileList.size;
-    const MB = (n) => (n / 1024 / 1024).toFixed(0);
-    log(`[build-server] nft: kept ${keptFiles} files, removed ${removedFiles} files (${MB(removedSize)}MB)`);
-  }
+  // const nmDir = path.join(outDir, "node_modules");
+  //
+  // // ── Cache lookup: skip the 3-4 minute static analysis when inputs are
+  // //    unchanged. Inputs are: lockfile + version + nftRoots file contents
+  // //    (all of which determine the trace output). ──────────────────────
+  // const nftCache = nftCacheDir(outDir);
+  // let fileList = null;
+  // let nftCacheKey = null;
+  // if (nftCache) {
+  //   try {
+  //     nftCacheKey = nftCacheKey({ version, nftRoots, outDir, externalPackageNames });
+  //     const cached = readNftCacheMarker(nftCache, nftCacheKey);
+  //     if (cached) {
+  //       fileList = new Set(cached.fileList);
+  //       log(`[build-server] nft trace: cache hit, reusing ${cached.fileList.length} traced files`);
+  //     }
+  //   } catch {
+  //     // Cache lookup failure is non-fatal; fall through to a fresh trace.
+  //   }
+  // }
+  //
+  // if (!fileList) {
+  //   log("[build-server] running nft trace...");
+  //   const { nodeFileTrace } = await import("@vercel/nft");
+  //   try {
+  //     ({ fileList } = await nodeFileTrace(
+  //       nftRoots.map((root) => path.join(outDir, root)),
+  //       {
+  //         base: outDir,
+  //         conditions: ["node", "import"],
+  //         // Bundled plugins remain as TypeScript source and are loaded through
+  //         // the plugin runtime. nft resolves .ts paths but its parser only
+  //         // accepts JavaScript syntax, so expose a read-only transpiled view for
+  //         // tracing while keeping the packaged files themselves unchanged.
+  //         readFile: readNftTraceSource,
+  //       },
+  //     ));
+  //     log(`[build-server] nft trace: produced ${fileList.size} files`);
+  //     // Persist for next build. Best-effort: a write failure here just
+  //     // means the next build will re-trace, no functional impact.
+  //     if (nftCache && nftCacheKey) {
+  //       try {
+  //         writeNftCacheMarker(nftCache, nftCacheKey, fileList);
+  //       } catch {
+  //         /* best-effort */
+  //       }
+  //     }
+  //   } catch (e) {
+  //     // Windows CI 上 nft 可能因用户目录不存在而报错，跳过裁剪
+  //     console.warn(`[build-server] nft trace failed (${e.message}), skipping prune`);
+  //     fileList = null;
+  //   }
+  // }
+  //
+  // if (fileList) {
+  //   const tracedFiles = new Set();
+  //   for (const f of fileList) {
+  //     tracedFiles.add(path.resolve(outDir, f));
+  //   }
+  //
+  //   const protectedDirs = new Set();
+  //   for (const packageName of externalPackageNames) {
+  //     const pkgDir = path.resolve(nmDir, packageName);
+  //     if (fs.existsSync(pkgDir)) {
+  //       protectedDirs.add(pkgDir);
+  //     }
+  //   }
+  //   for (const pkgDir of collectInstalledOptionalDependencyDirs(nmDir, externalPackageNames)) {
+  //     protectedDirs.add(pkgDir);
+  //   }
+  //
+  //   if (protectedDirs.size > 0) {
+  //     const names = [...protectedDirs].map((d) => path.relative(nmDir, d));
+  //     log(`[build-server] nft: protecting ${protectedDirs.size} server deps from pruning: ${names.join(", ")}`);
+  //   }
+  //
+  //   let removedFiles = 0;
+  //   // Prune-style walk: when a subtree contains no live files,
+  //   // fs.rmSync the whole subtree in one syscall instead of N
+  //   // unlinkSync + N rmdirSync. On Windows the per-file approach is
+  //   // the dominant cost (NTFS metadata + Defender scan, ~5-10ms each);
+  //   // 50K deletions would otherwise take several minutes. Per-file
+  //   // size tracking is dropped (would need stat per deletion); log no
+  //   // longer reports MB removed.
+  //   function pruneDir(dir) {
+  //     let entries;
+  //     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return false; }
+  //
+  //     let hasLive = false;
+  //     let hasAnyEntry = false;
+  //
+  //     for (const entry of entries) {
+  //       const full = path.join(dir, entry.name);
+  //       hasAnyEntry = true;
+  //       if (entry.isDirectory()) {
+  //         if (protectedDirs.has(path.resolve(full))) {
+  //           hasLive = true;
+  //           continue;
+  //         }
+  //         const subHasLive = pruneDir(full);
+  //         if (!subHasLive) {
+  //           // Subtree entirely dead: one recursive rmSync instead of N unlinks.
+  //           try {
+  //             fs.rmSync(full, { recursive: true, force: true });
+  //             removedFiles += 1;
+  //           } catch { /* best-effort */ }
+  //         } else {
+  //           hasLive = true;
+  //         }
+  //       } else if (entry.isFile() || entry.isSymbolicLink()) {
+  //         if (tracedFiles.has(full)) {
+  //           hasLive = true;
+  //         } else {
+  //           try {
+  //             fs.unlinkSync(full);
+  //             removedFiles += 1;
+  //           } catch { /* best-effort */ }
+  //         }
+  //       }
+  //     }
+  //
+  //     return hasLive;
+  //   }
+  //
+  //   pruneDir(nmDir);
+  //
+  //   const keptFiles = fileList.size;
+  //   log(`[build-server] nft: kept ${keptFiles} files, removed ${removedFiles} files (prune-style)`);
+  // }
 
   verifyExternalEntrypoints(outDir, externalPackageNames);
 
@@ -678,9 +810,12 @@ export async function applyPlatformPackageTrim({ outDir, platform, arch, log = (
     log("[build-server] cleanup: removed exceljs/dist/ (~21MB browser bundle)");
   }
 
-  const { removedFiles: prunedFiles, removedSize: prunedSize } = await pruneRuntimeDeadFiles(nmDir);
-  const prunedMB = (prunedSize / 1024 / 1024).toFixed(1);
-  log(`[build-server] prune: removed ${prunedFiles} runtime-dead files from node_modules (${prunedMB}MB)`);
+  const { removedFiles: prunedFiles, cached: prunedCached } = await pruneRuntimeDeadFiles(nmDir);
+  if (prunedCached) {
+    log(`[build-server] prune: cache hit, previously removed ${prunedFiles} runtime-dead files from node_modules`);
+  } else {
+    log(`[build-server] prune: removed ${prunedFiles} runtime-dead files from node_modules`);
+  }
 }
 
 // ── package.json version + wrapper scripts ──────────────────────────────

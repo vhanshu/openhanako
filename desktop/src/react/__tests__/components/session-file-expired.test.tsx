@@ -85,6 +85,53 @@ describe('expired session file presentation', () => {
     expect(window.platform?.openFile).not.toHaveBeenCalled();
   });
 
+  it('flips a non-expired file card to expired when pathExists reports missing and blocks double-click open', async () => {
+    // 模拟本机重命名 / 删除后 server 还未同步的场景：prop status 仍为 undefined，
+    // 但 platform.pathExists 返回 false。点击应被 stat 守卫拦截，文件设为本地 expired。
+    (window.platform as any).pathExists = vi.fn(async () => false);
+    const openFileSpy = window.platform?.openFile as unknown as ReturnType<typeof vi.fn>;
+    openFileSpy.mockClear();
+
+    render(
+      <AssistantMessage
+        agentDisplay={{ id: 'hana', displayName: 'Hana', avatarUrl: null, fallbackAvatar: null, yuan: 'hana', isUser: false }}
+        isStreaming={false}
+        isSelected={false}
+        showAvatar={false}
+        sessionPath="/sessions/main.jsonl"
+        readOnly
+        message={{
+          id: 'a2',
+          role: 'assistant',
+          blocks: [
+            {
+              type: 'file',
+              fileId: 'sf_renamed',
+              filePath: '/cache/renamed.py',
+              label: 'renamed.py',
+              ext: 'py',
+              // 未设 status，模拟 server 未报过期
+            },
+          ],
+        }}
+      />,
+    );
+
+    // 初载时看不出 expired（没有 “文件已过期” label）
+    expect(screen.queryByText('文件已过期')).not.toBeInTheDocument();
+
+    // 点击触发 stat 守卫，setLocalExpired(true) 后 card 重新渲染为 expired 形态
+    fireEvent.click(screen.getByText('renamed.py'));
+    expect(openFileSpy).not.toHaveBeenCalled();
+    expect((window.platform as any).pathExists).toHaveBeenCalledWith('/cache/renamed.py');
+    // 异步 setState 生效后，“文件已过期” label 出现
+    expect(await screen.findByText('文件已过期')).toBeInTheDocument();
+
+    // 再次点击：仍被 disabled 拦截
+    fireEvent.click(screen.getByText('renamed.py'));
+    expect(openFileSpy).not.toHaveBeenCalled();
+  });
+
   it('does not load image previews for expired user attachments', () => {
     render(
       <UserMessage

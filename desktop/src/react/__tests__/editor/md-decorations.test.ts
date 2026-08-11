@@ -399,19 +399,33 @@ describe('collectLivePreviewRanges', () => {
       }),
     });
 
+    const wrapBtn = parent.querySelector<HTMLButtonElement>('.cm-codeblock-wrap-btn');
     const button = parent.querySelector<HTMLButtonElement>('.cm-codeblock-copy-btn');
 
     expect(button).toBeInstanceOf(HTMLButtonElement);
     expect(button?.querySelector('svg.cm-codeblock-copy-icon')).toBeInstanceOf(SVGSVGElement);
-    expect(button?.querySelector('.cm-codeblock-copy-label')?.textContent).toBe('复制');
+    expect(button?.querySelector('.cm-codeblock-copy-label')).toBeNull();
     expect(button?.getAttribute('aria-label')).toBe('复制');
+    expect(wrapBtn).toBeInstanceOf(HTMLButtonElement);
+    expect(wrapBtn?.dataset.active).toBe('false');
+    expect(wrapBtn?.getAttribute('aria-pressed')).toBe('false');
+    // 点 wrap：该代码块所有 line 都加 data-wrap="true"
+    wrapBtn?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    expect(wrapBtn?.dataset.active).toBe('true');
+    expect(wrapBtn?.getAttribute('aria-pressed')).toBe('true');
+    const codeLines = [...parent.querySelectorAll('.cm-codeblock-line')];
+    expect(codeLines.every((line) => (line as HTMLElement).dataset.wrap === 'true')).toBe(true);
+    // 再点 wrap：清除
+    wrapBtn?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    expect(wrapBtn?.dataset.active).toBe('false');
+    expect(codeLines.every((line) => (line as HTMLElement).dataset.wrap !== 'true')).toBe(true);
     button?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
     button?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     await Promise.resolve();
 
     expect(writeText).toHaveBeenCalledWith('const x = 1;');
     expect(button?.dataset.copied).toBe('true');
-    expect(button?.querySelector('.cm-codeblock-copy-label')?.textContent).toBe('已复制');
+    expect(button?.querySelector('.cm-codeblock-copy-label')).toBeNull();
     expect(button?.getAttribute('aria-label')).toBe('已复制');
 
     view.destroy();
@@ -456,7 +470,7 @@ describe('collectLivePreviewRanges', () => {
 
     expect(writeText).toHaveBeenCalledWith('const x = 1;');
     expect(button?.dataset.copied).toBe('true');
-    expect(button?.querySelector('.cm-codeblock-copy-label')?.textContent).toBe('已复制');
+    expect(button?.querySelector('.cm-codeblock-copy-label')).toBeNull();
 
     view.destroy();
   });

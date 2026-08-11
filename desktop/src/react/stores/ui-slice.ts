@@ -1,5 +1,6 @@
 import type { ActivePanel, RightWorkspaceTab, TabType } from '../types';
 import type { FileRef } from '../types/file-ref';
+import type { ToolCall } from './chat-types';
 
 export interface MediaViewerState {
   files: FileRef[];
@@ -10,6 +11,15 @@ export interface MediaViewerState {
 export interface SettingsModalState {
   open: boolean;
   activeTab: string;
+}
+
+/**
+ * 工具调用 inspector 的状态：当前正在查看的工具调用 + 所在会话路径。
+ * 会话路径用于后续按需拉取完整结果（待服务端 tool-result 接口就位）。
+ */
+export interface ToolInspectorState {
+  tool: ToolCall;
+  sessionPath: string;
 }
 
 export interface UiSlice {
@@ -28,6 +38,8 @@ export interface UiSlice {
   skillViewerData: { name: string; baseDir: string; filePath?: string; installed?: boolean } | null;
   /** 媒体预览 overlay 状态（null = 关闭） */
   mediaViewer: MediaViewerState | null;
+  /** 工具调用详情 inspector 状态（null = 关闭） */
+  toolInspector: ToolInspectorState | null;
   /** 主窗口内嵌设置浮层状态 */
   settingsModal: SettingsModalState;
   /** Skill catalog revision; bumped by app_event skills-changed to refresh derived lists. */
@@ -49,6 +61,10 @@ export interface UiSlice {
   setSettingsModal: (state: SettingsModalState) => void;
   setMediaViewerCurrent: (id: string) => void;
   closeMediaViewer: () => void;
+  /** 打开工具调用详情 inspector */
+  openToolInspector: (state: ToolInspectorState) => void;
+  /** 关闭工具调用详情 inspector */
+  closeToolInspector: () => void;
   toggleSidebar: () => void;
   toggleJian: () => void;
 }
@@ -71,6 +87,7 @@ export const createUiSlice = (
   locale: '',
   skillViewerData: null,
   mediaViewer: null,
+  toolInspector: null,
   settingsModal: { open: false, activeTab: 'agent' },
   skillCatalogVersion: 0,
   channelCreateOverlayVisible: false,
@@ -91,6 +108,8 @@ export const createUiSlice = (
     mediaViewer: s.mediaViewer ? { ...s.mediaViewer, currentId: id } : null,
   })),
   closeMediaViewer: () => set({ mediaViewer: null }),
+  openToolInspector: (state) => set({ toolInspector: state }),
+  closeToolInspector: () => set({ toolInspector: null }),
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   toggleJian: () => set((s) => ({ jianOpen: !s.jianOpen })),
 });

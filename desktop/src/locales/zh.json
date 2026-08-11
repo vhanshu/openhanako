@@ -713,9 +713,9 @@
       "failed": "💻 {name} 电脑没听话"
     },
     "read": {
-      "running": "📖 {name} 正在翻阅文件",
-      "done": "📖 {name} 翻完了",
-      "failed": "📖 {name} 没翻到"
+      "running": "📖 {name} 正在读文件",
+      "done": "📖 {name} 读完了",
+      "failed": "📖 {name} 没读到"
     },
     "write": {
       "running": "✏️ {name} 提笔写字中",
@@ -903,6 +903,27 @@
       "running": "🔧 {name} 正在忙碌中…",
       "done": "🔧 {name} 忙完了",
       "failed": "🔧 {name} 没忙明白"
+    },
+    "inspector": {
+      "eyebrow": "工具调用",
+      "ariaLabel": "工具调用详情：{name}",
+      "close": "关闭",
+      "status": "状态",
+      "id": "调用 ID",
+      "session": "会话",
+      "error": "错误",
+      "args": "传参",
+      "details": "元数据",
+      "result": "执行结果",
+      "resultLoading": "正在拉取结果…",
+      "resultUnavailable": "暂无结果。",
+      "resultTooLarge": "结果较大（{total} bytes），超过内联预览上限（{limit} bytes），请下载为 .txt 查看完整内容。",
+      "downloadAsTxt": "下载为 .txt",
+      "resultTruncated": "结果被截断显示（{shown} / {total} bytes）",
+      "empty": "（无）",
+      "copy": "复制",
+      "copied": "已复制",
+      "openPathTitle": "点击用默认应用打开：{path}"
     },
     "checkDeferred": {
       "storeNotInitialized": "异步任务存储未初始化。",
@@ -3319,7 +3340,14 @@
     "legacyImageUpgrade": "此图片预览已升级，点此在新查看器打开",
     "coverLayoutSaveFailed": "Cover 布局保存失败，文件可能已被外部修改。",
     "coverDeleted": "已删除封面。",
-    "coverDeleteFailed": "封面删除失败，文件可能已被外部修改。"
+    "coverDeleteFailed": "封面删除失败，文件可能已被外部修改。",
+    "wordWrap": "自动换行",
+    "html": {
+      "zoomIn": "放大",
+      "zoomOut": "缩小",
+      "edit": "编辑",
+      "preview": "预览"
+    }
   },
   "mediaViewer": {
     "ariaLabel": "媒体预览",

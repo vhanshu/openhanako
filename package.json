@@ -1,6 +1,6 @@
 {
   "name": "hanako",
-  "version": "0.441.3",
+  "version": "0.441.6",
   "type": "module",
   "description": "HanaAgent - a personal AI agent with memory and soul",
   "license": "Apache-2.0",
@@ -48,7 +48,7 @@
     "pack": "npm run build:computer-use-helper && npm run build:client && npm run build:server && npm run verify:seed-kit && electron-builder --dir",
     "install:local": "npm run pack && rm -rf /Applications/HanaAgent.app /Applications/Hanako.app && cp -R dist/mac-arm64/HanaAgent.app /Applications/ && printf 'provider: github\\nowner: liliMozi\\nrepo: openhanako\\n' > /Applications/HanaAgent.app/Contents/Resources/app-update.yml && node scripts/sign-local.cjs",
     "dist": "npm run build:computer-use-helper && npm run build:client && npm run build:server && npm run verify:seed-kit && electron-builder --mac dmg",
-    "dist:win": "npm run build:computer-use-helper && npm run build:windows-sandbox-helper && npm run generate:windows-icon && npm run build:client && npm run build:server && npm run verify:seed-kit && npm run pack:server:standalone && npm run verify:standalone:server && electron-builder --win nsis",
+    "dist:win": "node scripts/timed-step.mjs build:computer-use-helper && node scripts/timed-step.mjs build:windows-sandbox-helper && node scripts/timed-step.mjs generate:windows-icon && node scripts/timed-step.mjs build:client && node scripts/timed-step.mjs build:server && node scripts/timed-step.mjs verify:seed-kit && node scripts/timed-step.mjs pack:server:standalone && node scripts/timed-step.mjs verify:standalone:server && electron-builder --win nsis",
     "dist:linux": "npm run build:client && npm run build:server && npm run verify:seed-kit && electron-builder --linux AppImage deb",
     "verify:seed-kit": "node scripts/verify-seed-kit.mjs",
     "pack:server:standalone": "node scripts/build-standalone-server-artifact.mjs x64",

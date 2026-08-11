@@ -50,6 +50,7 @@ import fs from "fs";
 import path from "path";
 import { createRequire } from "module";
 import { fileURLToPath } from "url";
+import { createHash } from "node:crypto";
 
 const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -328,6 +329,84 @@ function requireSignKeyPath(env) {
  * }} opts
  * @returns {Promise<{archivePath: string, archiveName: string, sha256: string, size: number}>}
  */
+/**
+ * Cache lookup helpers for `packServerArchive`. Keyed on a structural hash of
+ * the contents of `outDir` (the server tree being archived). When the server
+ * tree is unchanged between builds the cached archive + sha256 can be reused
+ * verbatim — `ustar.packTree` is by far the slowest step in this function
+ * (CPU-bound gzip on hundreds of MB), so a hit saves tens of seconds per
+ * rebuild. Cache marker lives under `<repoRoot>/.cache/pack-server-archive/`
+ * (already .gitignored).
+ */
+function hashServerArchiveTree(rootPath) {
+  const hash = createHash("sha256");
+  const resolved = path.resolve(rootPath);
+  const stat = fs.statSync(resolved);
+  if (!stat.isDirectory()) {
+    hash.update(`file:${path.basename(resolved)}:${stat.size}:${Math.floor(stat.mtimeMs)}\0`);
+    return hash.digest("hex");
+  }
+  hash.update(`tree:${resolved}\0`);
+  function walk(dir) {
+    const entries = fs.readdirSync(dir, { withFileTypes: true })
+      .sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      const rel = path.relative(resolved, full).split(path.sep).join("/");
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.isFile()) {
+        const st = fs.statSync(full);
+        hash.update(`file:${rel}:${st.size}:${Math.floor(st.mtimeMs)}\0`);
+      } else if (entry.isSymbolicLink()) {
+        const target = fs.readlinkSync(full);
+        hash.update(`symlink:${rel}:${target}\0`);
+      }
+    }
+  }
+  walk(resolved);
+  return hash.digest("hex");
+}
+
+function hashServerArchiveInputs({ version, platform, arch, outDir, env }) {
+  const hash = createHash("sha256");
+  // version/platform/arch are mixed in to prevent a stale archive for one
+  // build target (e.g. win32-x64) from being reused by another (linux-x64).
+  hash.update(`id:${version}|${platform}|${arch}\0`);
+  // HANA_MACHO_SIGN_IDENTITY only matters on darwin (ad-hoc vs Developer ID),
+  // but always-include is simpler than branching and the cost is one string
+  // mixin. On Windows / Linux it's empty and the hash is stable.
+  hash.update(`sign:${env?.HANA_MACHO_SIGN_IDENTITY || ""}\0`);
+  hash.update(`out:${hashServerArchiveTree(outDir)}\0`);
+  return hash.digest("hex").slice(0, 32);
+}
+
+function readServerArchiveCacheMarker(cacheDir, cacheKey) {
+  const marker = path.join(cacheDir, `${cacheKey}.json`);
+  if (!fs.existsSync(marker)) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(marker, "utf8"));
+    if (
+      typeof parsed.sha256 === "string"
+      && typeof parsed.size === "number"
+      && typeof parsed.archiveName === "string"
+    ) {
+      return parsed;
+    }
+  } catch {
+    // Corrupt marker — treat as miss.
+  }
+  return null;
+}
+
+function writeServerArchiveCacheMarker(cacheDir, cacheKey, payload) {
+  fs.mkdirSync(cacheDir, { recursive: true });
+  const marker = path.join(cacheDir, `${cacheKey}.json`);
+  const tmp = `${marker}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(payload));
+  fs.renameSync(tmp, marker);
+}
+
 export async function packServerArchive({ outDir, artifactOutDir, version, platform, arch, env = process.env, log = console.log, deps = {} }) {
   const {
     signMachOFiles = defaultSignMachOFiles,
@@ -348,16 +427,58 @@ export async function packServerArchive({ outDir, artifactOutDir, version, platf
     await smokeTestNodeStartup(outDir, log);
   }
 
+  // ── Cache lookup (must happen BEFORE the rmSync below; on hit we reuse the
+  //    existing archive instead of blowing it away and re-tar.gz'ing the same
+  //    source tree). Signing (darwin only) runs above this point, so the cache
+  //    key mixes in HANA_MACHO_SIGN_IDENTITY to invalidate when the signing
+  //    identity changes between builds. ──────────────────────────────────
+  const archiveName = `server-${version}-${platform}-${arch}.tar.gz`;
+  const archivePath = path.join(artifactOutDir, archiveName);
+  const cacheDir = path.join(ROOT, ".cache", "pack-server-archive");
+  let cacheMarker = null;
+  try {
+    const cacheKey = hashServerArchiveInputs({ version, platform, arch, outDir, env });
+    cacheMarker = readServerArchiveCacheMarker(cacheDir, cacheKey);
+  } catch {
+    cacheMarker = null;
+  }
+
+  if (cacheMarker && cacheMarker.archiveName === archiveName && fs.existsSync(archivePath)) {
+    log(`[build-server] seed: cache hit, reusing ${archiveName} (sha256=${cacheMarker.sha256.slice(0, 12)}...)`);
+    return {
+      archivePath,
+      archiveName,
+      sha256: cacheMarker.sha256,
+      size: cacheMarker.size,
+    };
+  }
+
   // ── 后装箱：干净目录，绝不让上一次构建的残留文件混进这次的 seed ──
   fs.rmSync(artifactOutDir, { recursive: true, force: true });
   fs.mkdirSync(artifactOutDir, { recursive: true });
-  const archiveName = `server-${version}-${platform}-${arch}.tar.gz`;
-  const archivePath = path.join(artifactOutDir, archiveName);
   await packTree(outDir, archivePath);
 
   const sha256 = await sha256File(archivePath);
   const size = statSize(archivePath);
   log(`[build-server] seed: packed ${archiveName} → ${artifactOutDir}`);
+
+  // ── Cache write (best-effort). Keyed on the same hash used for lookup
+  //    above; on the next build with unchanged inputs this short-circuits
+  //    the entire packTree + sha256 pass. ───────────────────────────────
+  try {
+    const cacheKey = hashServerArchiveInputs({ version, platform, arch, outDir, env });
+    writeServerArchiveCacheMarker(cacheDir, cacheKey, {
+      archiveName,
+      version,
+      platform,
+      arch,
+      sha256,
+      size,
+    });
+  } catch {
+    // Cache write failure is non-fatal — the archive is already on disk.
+  }
+
   return { archivePath, archiveName, sha256, size };
 }
 

@@ -28,6 +28,7 @@ describe('file-preview IPC error handling', () => {
     vi.clearAllMocks();
     (window as any).platform = {
       readFile: vi.fn(),
+      readFileSnapshot: vi.fn(),
       readDocxHtml: vi.fn(),
       readXlsxHtml: vi.fn(),
       readFileBase64: vi.fn(),
@@ -110,6 +111,23 @@ describe('file-preview IPC error handling', () => {
       filePath: '/tmp/Report.PDF',
       ext: 'pdf',
       sourceUrl: 'file:///tmp/Report.PDF',
+    }));
+  });
+
+  it('代码预览读不到内容时，打开带 status=expired 的 file-info 预览', async () => {
+    // 模拟文件被重命名 / 删除 / 临时 IO 失败：readFileSnapshot 返回 null
+    (window as any).platform.readFileSnapshot.mockResolvedValue(null);
+
+    await expect(openFilePreview('/tmp/duplicate_finder.py', 'duplicate_finder.py', 'py', { origin: 'desk' })).resolves.toBeUndefined();
+
+    expect(mocks.openPreview).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'file-/tmp/duplicate_finder.py',
+      type: 'file-info',
+      title: 'duplicate_finder.py',
+      filePath: '/tmp/duplicate_finder.py',
+      ext: 'py',
+      status: 'expired',
+      missingAt: expect.any(Number),
     }));
   });
 

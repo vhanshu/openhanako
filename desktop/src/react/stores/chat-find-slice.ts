@@ -7,7 +7,10 @@
  */
 import { sessionScopedKey, sessionScopedValue } from './session-slice';
 
-export interface ChatFindMatch { index: number; exact: boolean; snippet: string; }
+export interface ChatFindMatch { index: number; exact: boolean; snippet: string;
+  /** 实际命中 needle 集合：exact=[query 整串]，fallback=[所有命中过的 token]。前端 mark 按此扫文本节点。 */
+  needles: string[];
+}
 
 export interface ChatFindResults {
   matches: ChatFindMatch[];

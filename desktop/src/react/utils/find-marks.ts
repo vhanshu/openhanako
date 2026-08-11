@@ -19,6 +19,14 @@ export function applyFindMarks(
   options?: {
     /** 只标注 closest(scopeSelector) 命中的文本节点；不传则全树标注（preview 现状） */
     scopeSelector?: string;
+    /**
+     * mark 标 active 的 needle 集合：mark.dataset.needle 在集合内的 mark 加 activeClass。
+     * 替代旧的"整条消息容器标 active"方案 —— 后者会把同消息内所有 mark 一锅端标 active，
+     * 而当前我们想区分"哪个 needle 是 active"（如搜 "go mod" 时只 "go mod" 整串该高亮）。
+     */
+    activeNeedles?: string[];
+    /** 标在 active mark 上的类名；不传则不标 active。 */
+    activeClass?: string;
   },
 ): HTMLElement[] {
   if (!root) return [];
@@ -27,6 +35,8 @@ export function applyFindMarks(
     .sort((a, b) => b.length - a.length); // 长词优先，避免短词先占位拆碎长词
   if (needles.length === 0) return [];
   const scopeSelector = options?.scopeSelector;
+  const activeNeedles = options?.activeNeedles;
+  const activeClass = options?.activeClass;
 
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
@@ -45,12 +55,12 @@ export function applyFindMarks(
   for (const node of nodes) {
     const text = node.nodeValue || '';
     const lower = text.toLowerCase();
-    const taken: Array<{ from: number; to: number }> = [];
+    const taken: Array<{ from: number; to: number; needle: string }> = [];
     for (const needle of needles) {
       let index = lower.indexOf(needle);
       while (index >= 0) {
         const to = index + needle.length;
-        if (!taken.some((r) => index < r.to && to > r.from)) taken.push({ from: index, to });
+        if (!taken.some((r) => index < r.to && to > r.from)) taken.push({ from: index, to, needle });
         index = lower.indexOf(needle, index + 1);
       }
     }
@@ -63,6 +73,7 @@ export function applyFindMarks(
       if (range.from > cursor) fragment.append(document.createTextNode(text.slice(cursor, range.from)));
       const mark = document.createElement('mark');
       mark.className = className;
+      mark.dataset.needle = range.needle;
       mark.textContent = text.slice(range.from, range.to);
       fragment.append(mark);
       marks.push(mark);
@@ -70,6 +81,14 @@ export function applyFindMarks(
     }
     if (cursor < text.length) fragment.append(document.createTextNode(text.slice(cursor)));
     node.replaceWith(fragment);
+  }
+  if (activeNeedles && activeNeedles.length > 0 && activeClass) {
+    const set = new Set(activeNeedles);
+    for (const mark of marks) {
+      if (mark.dataset.needle && set.has(mark.dataset.needle)) {
+        mark.classList.add(activeClass);
+      }
+    }
   }
   return marks;
 }

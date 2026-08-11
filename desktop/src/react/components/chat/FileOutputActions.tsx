@@ -9,6 +9,12 @@ interface FileOutputActionsProps {
   displayName: string;
   downloadUrl?: string | null;
   downloadName?: string;
+  /**
+   * 文件不可用（expired / missing）时为 true。
+   * 该状态下除"复制路径"以外的入口都置灰禁用，
+   * 让用户仍能看到工具栏但不能点错。
+   */
+  disabled?: boolean;
 }
 
 function actionLabel(label: string, displayName: string): string {
@@ -71,7 +77,7 @@ function ScreenshotShareIcon() {
   );
 }
 
-export function FileOutputActions({ filePath, displayName, downloadUrl, downloadName }: FileOutputActionsProps) {
+export function FileOutputActions({ filePath, displayName, downloadUrl, downloadName, disabled = false }: FileOutputActionsProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuStyle, setMenuStyle] = useState<CSSProperties>({});
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -174,6 +180,7 @@ export function FileOutputActions({ filePath, displayName, downloadUrl, download
           type="button"
           className={`${styles.fileOutputActionButton} ${styles.fileOutputActionPrimary}`}
           onClick={handleOpen}
+          disabled={disabled}
           aria-label={actionLabel(openLabel, displayName)}
           title={openLabel}
         >
@@ -182,7 +189,8 @@ export function FileOutputActions({ filePath, displayName, downloadUrl, download
       ) : downloadUrl ? (
         <a
           className={`${styles.fileOutputActionButton} ${styles.fileOutputActionPrimary}`}
-          href={downloadUrl}
+          aria-disabled={disabled || undefined}
+          href={disabled ? undefined : downloadUrl}
           download={resolvedDownloadName}
           onClick={handleDownloadClick}
           aria-label={actionLabel(downloadLabel, displayName)}
@@ -224,7 +232,8 @@ export function FileOutputActions({ filePath, displayName, downloadUrl, download
             <a
               className={styles.fileOutputActionMenuItem}
               role="menuitem"
-              href={downloadUrl}
+              aria-disabled={disabled || undefined}
+              href={disabled ? undefined : downloadUrl}
               download={resolvedDownloadName}
               onClick={handleDownloadClick}
             >
@@ -237,6 +246,7 @@ export function FileOutputActions({ filePath, displayName, downloadUrl, download
               type="button"
               className={styles.fileOutputActionMenuItem}
               role="menuitem"
+              disabled={disabled}
               onClick={(event) => handleMenuItem(event, shareScreenshot)}
             >
               <ScreenshotShareIcon />
@@ -248,6 +258,7 @@ export function FileOutputActions({ filePath, displayName, downloadUrl, download
               type="button"
               className={styles.fileOutputActionMenuItem}
               role="menuitem"
+              disabled={disabled}
               onClick={(event) => handleMenuItem(event, revealFile)}
             >
               <RevealIcon />

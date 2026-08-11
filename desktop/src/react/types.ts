@@ -556,6 +556,11 @@ export interface PlatformApi {
   selectSkill(): Promise<string | null>;
   selectPlugin?(): Promise<string | null>;
   readFile(path: string): Promise<string | null>;
+  /**
+   * 轻量级路径存在性检查。文件不存在、不是绝对路径、或访问出错都返回 false。
+   * 用于"本机重命名 / 卸载后未及时同步"场景下，打开预览前先 stat 一次。
+   */
+  pathExists?(path: string): Promise<boolean>;
   writeFile(filePath: string, content: string): Promise<boolean>;
   writeFileBinary?(filePath: string, base64Data: string): Promise<boolean>;
   copyFile?(sourcePath: string, destinationPath: string): Promise<boolean>;

@@ -259,19 +259,70 @@ export const ChatMessageSurface = memo(function ChatMessageSurface({
       }
       // 退出贴底跟随，防止流式 ResizeObserver 立刻把视口拽回底部
       bottomScroll.cancelFollow();
+      // 锚点：优先 target 内第一个匹配 mark。finishScroll 在 mark effect 之前跑
+      // （React 同组件 effect 按声明顺序），所以这里同步 mark 一次保证 firstMark 存在；
+      // applyFindMarks 内部会 clearFindMarks 再标，幂等安全。折叠块 / contentRef 缺失时
+      // 回退到 target 整体作锚点（不依赖 mark 存在）。
+      const rafContainer = contentRef.current;
+      if (rafContainer && findState?.open && findState.query.trim()) {
+        const terms = [...new Set(findState.matches.flatMap((m) => m.needles))];
+        if (terms.length > 0) {
+          const activeMatch = findState.activePos >= 0
+            ? findState.matches[findState.activePos] : null;
+          const activeNeedles = activeMatch?.needles ?? [];
+          applyFindMarks(rafContainer, terms, 'chat-find-mark', {
+            scopeSelector: '[data-find-markable]',
+            activeNeedles,
+            activeClass: 'chat-find-mark-active',
+          });
+        }
+      }
+      const firstMark = target.querySelector<HTMLElement>('mark.chat-find-mark');
+      const anchor: HTMLElement = firstMark ?? target;
       const panelRect = scrollPanel.getBoundingClientRect();
-      const rect = target.getBoundingClientRect();
+      const rect = anchor.getBoundingClientRect();
       const maxScroll = Math.max(0, scrollPanel.scrollHeight - scrollPanel.clientHeight);
-      const targetTop = Math.min(maxScroll, Math.max(0, scrollPanel.scrollTop + rect.top - panelRect.top - 16));
+      const offsetInViewport = rect.top - panelRect.top;
+      const elementInContent = scrollPanel.scrollTop + offsetInViewport;
+      const idealTop = elementInContent - scrollPanel.clientHeight / 2 + rect.height / 2;
+      const targetTop = Math.max(0, Math.min(maxScroll, idealTop));
       const reduceMotion = typeof window.matchMedia === 'function'
         && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-      scrollPanel.scrollTo({ top: targetTop, behavior: reduceMotion ? 'auto' : 'smooth' });
-      target.classList.remove(styles.locateFlash);
-      // 强制 reflow 重启动画（连续定位同一条消息时）
-      void target.offsetWidth;
-      target.classList.add(styles.locateFlash);
-      useStore.getState().clearMessageLocate();
-      locateProgressRef.current = null;
+      // flash 时机：滚动真正到位后才触发，动画与用户视线一致（避免"动画先播过半、
+      // 用户看到时只剩尾帧"的隐性不突出）。已在视口 / reduceMotion 时直接 flash。
+      const flash = () => {
+        target.classList.remove(styles.locateFlash);
+        // 强制 reflow 重启动画（连续定位同一条消息时）
+        void target.offsetWidth;
+        target.classList.add(styles.locateFlash);
+      };
+      const finalize = () => {
+        useStore.getState().clearMessageLocate();
+        locateProgressRef.current = null;
+      };
+      const needsScroll = Math.abs(targetTop - scrollPanel.scrollTop) > 0.5;
+      if (!reduceMotion && needsScroll) {
+        // 兜底：极少数浏览器 / 中断场景 scrollend 不触发，1.5s 后强制 flash
+        const fallbackTimer = setTimeout(() => {
+          flash();
+          finalize();
+        }, 1500);
+        const onScrollEnd = () => {
+          clearTimeout(fallbackTimer);
+          flash();
+          finalize();
+        };
+        scrollPanel.addEventListener('scrollend', onScrollEnd, { once: true });
+        cleanups.push(() => {
+          scrollPanel.removeEventListener('scrollend', onScrollEnd);
+          clearTimeout(fallbackTimer);
+        });
+        scrollPanel.scrollTo({ top: targetTop, behavior: 'smooth' });
+      } else {
+        scrollPanel.scrollTo({ top: targetTop, behavior: reduceMotion ? 'auto' : 'smooth' });
+        flash();
+        finalize();
+      }
     };
     // items 尾部向前第一个数字（canonical）id；全 live id（新建会话）时 null
     let newestNumericId: number | null = null;
@@ -364,12 +415,23 @@ export const ChatMessageSurface = memo(function ChatMessageSurface({
     // 流式期间同一查询已标注过：不重跑 TreeWalker，防与流式 reconcile 打架循环；
     // 流式结束边沿（isSessionStreaming 翻 false）经依赖重跑补标。
     if (isSessionStreaming && markKeyRef.current === markKey) return;
-    const terms = [findState.query.trim(), ...findState.tokens];
+    const terms = [...new Set(findState.matches.flatMap((m) => m.needles))];
+    // 当前 active 命中：mark 阶段只把 activeNeedles 对应的 mark 加 active 类。
+    // 避免搜 "go mod" 时把 "go" 子串也标 active（mark 只按 messages 实际 needle 扫）。
+    const activeMatch = findState.activePos >= 0
+      ? findState.matches[findState.activePos] : null;
+    const activeNeedles = activeMatch?.needles ?? [];
     // rAF 合并：items 高频变化（流式）时不在同帧重复跑 TreeWalker
     const raf = requestAnimationFrame(() => {
       // scope 到消息正文（MarkdownContent 直渲根）：不碰 React 直渲文本节点
       //（时间戳 / 按钮 / 折叠标题等），改写它们会与 React reconcile 冲突
-      applyFindMarks(container, terms, 'chat-find-mark', { scopeSelector: '[data-find-markable]' });
+      const rafContainer = contentRef.current;
+      if (!rafContainer) return;
+      applyFindMarks(rafContainer, terms, 'chat-find-mark', {
+        scopeSelector: '[data-find-markable]',
+        activeNeedles,
+        activeClass: 'chat-find-mark-active',
+      });
       markKeyRef.current = markKey;
       hadMarksRef.current = true;
     });

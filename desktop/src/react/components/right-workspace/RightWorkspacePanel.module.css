@@ -245,12 +245,24 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    position: relative;
 }
 
 .fileIcon svg {
     width: 14px;
     height: 14px;
     display: block;
+}
+
+.fileIconExpiredBadge {
+    position: absolute;
+    right: -3px;
+    bottom: -3px;
+    width: 8px;
+    height: 8px;
+    color: #f59e0b;
+    filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.35));
+    pointer-events: none;
 }
 
 .fileMain {
@@ -346,6 +358,17 @@
 .fileAction:disabled {
     opacity: 0.35;
     cursor: default;
+}
+
+.fileActionDisabled {
+    opacity: 0.35;
+    cursor: default;
+    pointer-events: none;
+}
+
+.fileActionDisabled:hover {
+    color: inherit;
+    background: transparent;
 }
 
 .fileRubberBand {

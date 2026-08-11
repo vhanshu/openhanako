@@ -13,10 +13,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { useStore } from '../stores';
-import { selectPreviewItems, selectActiveTabId, selectMarkdownPreviewIds, selectPreviewReadingPositions } from '../stores/preview-slice';
+import { selectPreviewItems, selectActiveTabId, selectOpenTabs, selectMarkdownPreviewIds, selectPreviewReadingPositions } from '../stores/preview-slice';
 import { setMarkdownPreviewActive, upsertPreviewItem, updatePreviewReadingPosition } from '../stores/preview-actions';
 import { PreviewEditor, type PreviewEditorHandle, type PreviewEditorStats } from './PreviewEditor';
-import { PreviewRenderer } from './preview/PreviewRenderer';
+import { HtmlPreview, PreviewRenderer } from './preview/PreviewRenderer';
+import { readFileForPreviewType } from '../utils/preview-file-content';
 import { TabBar } from './preview/TabBar';
 import { FloatingActions } from './preview/FloatingActions';
 import { ChapterRail, ClassicFindBox, LinkDiagnosticsBadge } from './preview/MarkdownChrome';
@@ -63,7 +64,7 @@ export function chapterRailHoverHit(
 
 function isEditable(previewItem: PreviewItem | null): boolean {
   if (!previewItem) return false;
-  if (previewItem.status === 'missing') return false;
+  if (previewItem.status === 'missing' || previewItem.status === 'expired') return false;
   return EDITABLE_TYPES.has(previewItem.type)
     && (!!previewItem.filePath || isRemoteWorkbenchContentRef(previewItem.remoteContentRef));
 }
@@ -71,6 +72,7 @@ function isEditable(previewItem: PreviewItem | null): boolean {
 function isMarkdownFile(previewItem: PreviewItem | null): boolean {
   return !!previewItem
     && previewItem.status !== 'missing'
+    && previewItem.status !== 'expired'
     && previewItem.type === 'markdown'
     && (!!previewItem.filePath || isRemoteWorkbenchContentRef(previewItem.remoteContentRef));
 }
@@ -121,11 +123,16 @@ function sourceFindMatches(content: string, query: string): Array<{ from: number
 export function PreviewPanel() {
   const previewOpen = useStore(s => s.previewOpen);
   const activeTabId = useStore(selectActiveTabId);
+  const openTabs = useStore(selectOpenTabs);
   const previewItems = useStore(selectPreviewItems);
   const markdownPreviewIds = useStore(selectMarkdownPreviewIds);
   const previewReadingPositions = useStore(selectPreviewReadingPositions);
   const [editorStats, setEditorStats] = useState<PreviewEditorStats>({ selectedChars: 0, totalChars: 0 });
+  const [wordWrap, setWordWrap] = useState(false);
   const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
+  // html 文件：edit 模式（code 编辑器）vs render 模式（iframe）独立 toggle，按文件 id 存
+  const [htmlEditModes, setHtmlEditModes] = useState<Record<string, boolean>>({});
+  const [htmlZoomLevels, setHtmlZoomLevels] = useState<Record<string, number>>({});
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState('');
   const [findIndex, setFindIndex] = useState(0);
@@ -143,6 +150,17 @@ export function PreviewPanel() {
   const editable = isEditable(previewItem) && !markdownPreviewActive;
   const markdownFile = isMarkdownFile(previewItem);
   const showMarkdownEditorStatus = editable && previewItem?.type === 'markdown';
+  // wrap 按钮是代码编辑器专属特性：markdown / csv 走的是居中排版规则，wrap 由 max-width 控制，不需要用户手动切换
+  const isCodeFile = editable && !!previewItem && getEditorMode(previewItem) === 'code';
+  // html 文件专属：edit 模式 = code 编辑器（与 html kind 一致：code mode + html 语言）；render 模式 = iframe
+  const isHtmlFile = !!previewItem && previewItem.type === 'html' && previewItem.status !== 'missing' && previewItem.status !== 'expired';
+  const htmlEditMode = isHtmlFile && (htmlEditModes[previewItem.id] ?? false);
+  const htmlZoom = isHtmlFile ? (htmlZoomLevels[previewItem.id] ?? 1) : 1;
+  // html 处于 edit 模式时等价为“代码编辑”，因此走编辑器分支；mode/codeTheme、语言 html
+  const effectiveEditable = editable || (isHtmlFile && htmlEditMode);
+  const effectiveEditorMode: 'markdown' | 'code' | 'csv' | 'text' =
+    isHtmlFile && htmlEditMode ? 'code' : (previewItem ? getEditorMode(previewItem) : 'code');
+  const effectiveEditorLanguage = isHtmlFile && htmlEditMode ? 'html' : (previewItem?.language ?? null);
   const contentHash = useMemo(() => previewItem?.type === 'markdown' ? hashMarkdownContent(previewItem.content) : '', [previewItem?.content, previewItem?.type]);
   const markdownHeadings = useMemo(
     () => previewItem?.type === 'markdown' ? extractMarkdownHeadings(previewItem.content, 3) : [],
@@ -160,6 +178,45 @@ export function PreviewPanel() {
     if (!previewItem || !isMarkdownFile(previewItem)) return;
     setMarkdownPreviewActive(previewItem.id, !markdownPreviewActive);
   }, [previewItem, markdownPreviewActive]);
+
+  const handleToggleWordWrap = useCallback(() => {
+    setWordWrap(current => !current);
+  }, []);
+
+  // html 文件的 edit ↔ render 模式切换（按 id 存储）
+  const handleToggleHtmlEdit = useCallback((id: string) => {
+    setHtmlEditModes(prev => ({ ...prev, [id]: !prev[id] }));
+  }, []);
+
+  const handleZoomIn = useCallback((id: string) => {
+    setHtmlZoomLevels(prev => {
+      const current = prev[id] ?? 1;
+      const next = Math.min(2, +(current + 0.25).toFixed(2));
+      return { ...prev, [id]: next };
+    });
+  }, []);
+
+  const handleZoomOut = useCallback((id: string) => {
+    setHtmlZoomLevels(prev => {
+      const current = prev[id] ?? 1;
+      const next = Math.max(0.5, +(current - 0.25).toFixed(2));
+      return { ...prev, [id]: next };
+    });
+  }, []);
+
+  // 关闭/切换 tab 时清理失效的 html 状态，避免内存里堆一堆无用 id
+  useEffect(() => {
+    setHtmlEditModes(prev => {
+      const next: Record<string, boolean> = {};
+      for (const id of openTabs) if (prev[id] !== undefined) next[id] = prev[id];
+      return Object.keys(next).length === Object.keys(prev).length ? prev : next;
+    });
+    setHtmlZoomLevels(prev => {
+      const next: Record<string, number> = {};
+      for (const id of openTabs) if (prev[id] !== undefined) next[id] = prev[id];
+      return Object.keys(next).length === Object.keys(prev).length ? prev : next;
+    });
+  }, [openTabs]);
 
   const handleEditorContentChange = useCallback((content: string, fileVersion?: PreviewItem['fileVersion']) => {
     if (!previewItem) return;
@@ -299,6 +356,38 @@ export function PreviewPanel() {
     setActiveHeadingId(readingPosition?.currentHeadingId || null);
   }, [activeTabId]); // eslint-disable-line react-hooks/exhaustive-deps -- tab 切换时用当前 active previewItem 初始化状态栏，后续由 PreviewEditor 回调接管
 
+  // 对 file-info PreviewItem 主动 stat 一次：OpenPreviewDocumentWatchBridge 只在文件
+  // IO 事件触发后才走 refresh；但如果 PreviewItem 是在文件已不可用之后才挂载的
+  // （例如文件被重命名后才打开预览，或重启后 PreviewItem 从 workspace 状态恢复
+  // 出来却实际不可访问），watch 不会自捡拾。走一次 readFileForPreviewType 验证。
+  useEffect(() => {
+    if (!previewItem || previewItem.type !== 'file-info' || !previewItem.filePath) return undefined;
+    const filePath = previewItem.filePath;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const read = await readFileForPreviewType(filePath, 'file-info');
+        if (cancelled) return;
+        if (!read) {
+          upsertPreviewItem({
+            ...previewItem,
+            status: 'expired',
+            missingAt: Date.now(),
+          });
+        } else if (previewItem.status === 'expired' || previewItem.status === 'missing') {
+          upsertPreviewItem({
+            ...previewItem,
+            status: undefined,
+            missingAt: null,
+          });
+        }
+      } catch {
+        // 静默；watcher 后续发现会再走一遍
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [previewItem?.id, previewItem?.filePath]); // eslint-disable-line react-hooks/exhaustive-deps -- 依赖 id + filePath 足以重新计算；previewItem 类型在 file-info 分支里是稳定的
+
   useEffect(() => {
     if (!previewOpen || !previewItem || !markdownFile || editable) return undefined;
     const body = previewBodyRef.current;
@@ -414,13 +503,23 @@ export function PreviewPanel() {
               showMarkdownPreviewToggle={isMarkdownFile(previewItem)}
               markdownPreviewActive={markdownPreviewActive}
               onToggleMarkdownPreview={handleToggleMarkdownPreview}
+              wordWrap={isCodeFile || (isHtmlFile && htmlEditMode) ? wordWrap : false}
+              onToggleWordWrap={isCodeFile || (isHtmlFile && htmlEditMode) ? handleToggleWordWrap : undefined}
+              onZoomIn={isHtmlFile && !htmlEditMode ? () => handleZoomIn(previewItem.id) : undefined}
+              onZoomOut={isHtmlFile && !htmlEditMode ? () => handleZoomOut(previewItem.id) : undefined}
+              htmlEditMode={isHtmlFile ? htmlEditMode : false}
+              onToggleHtmlEdit={isHtmlFile ? () => handleToggleHtmlEdit(previewItem.id) : undefined}
+              expired={previewItem.status === 'expired'}
             />
           )}
           <div ref={previewBodyRef} className={`universal-card ${previewStyles.previewPanelBody}`} id="previewBody" data-preview-panel-body="" onMouseUp={handleMouseUp}>
-            {previewOpen && previewItem && !editable && (
+            {previewOpen && previewItem && isHtmlFile && !htmlEditMode && (
+              <HtmlPreview previewItem={previewItem} zoom={htmlZoom} />
+            )}
+            {previewOpen && previewItem && !effectiveEditable && !isHtmlFile && (
               <PreviewRenderer previewItem={previewItem} />
             )}
-            {previewOpen && previewItem && editable && (
+            {previewOpen && previewItem && effectiveEditable && (
               <PreviewEditor
                 ref={editorRef}
                 content={previewItem.content}
@@ -428,8 +527,8 @@ export function PreviewPanel() {
                 remoteContentRef={previewItem.remoteContentRef}
                 fileVersion={previewItem.fileVersion ?? previewItem.remoteContentRef?.version ?? null}
                 saveDocument={saveDocument}
-                mode={getEditorMode(previewItem)}
-                language={previewItem.language}
+                mode={effectiveEditorMode}
+                language={effectiveEditorLanguage}
                 onSelectionCommit={(view) => {
                   if (previewItem) scheduleCaptureSelection(previewItem, view);
                 }}
@@ -441,6 +540,7 @@ export function PreviewPanel() {
                 initialScrollSnapshot={readingPosition?.edit ?? null}
                 contentHash={contentHash}
                 onScrollSnapshotChange={handleEditorScrollSnapshot}
+                wordWrap={isCodeFile || (isHtmlFile && htmlEditMode) ? wordWrap : false}
               />
             )}
             {previewOpen && previewItem && editable && previewItem.type === 'markdown' && (

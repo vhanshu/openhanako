@@ -637,7 +637,7 @@ html[data-platform="linux"] .tb-toggle-right {
     font: inherit;
     font-size: var(--fs-hint);
     cursor: default;
-    opacity: 0.35;
+    opacity: 0.6;
     transition: opacity var(--duration-fast), color var(--duration-fast);
 }
 
@@ -667,21 +667,6 @@ html[data-platform="linux"] .tb-toggle-right {
 
 .md-content .code-block-wrap .code-block-toolbar-btn[data-copied="true"] {
     color: var(--accent);
-    opacity: 1;
-}
-.md-content .code-block-wrap .code-block-toolbar-btn[data-copied="true"]::after {
-    content: attr(data-copied-label);
-    position: absolute;
-    top: 50%;
-    right: calc(100% + var(--space-4));
-    transform: translateY(-50%);
-    padding: 0.1rem 0.35rem;
-    border-radius: var(--radius-sm);
-    background: var(--bg-glass, var(--bg-card));
-    color: var(--accent);
-    font-size: var(--fs-hint);
-    white-space: nowrap;
-    pointer-events: none;
     opacity: 1;
 }
 

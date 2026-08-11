@@ -107,6 +107,7 @@ contextBridge.exposeInMainWorld("hana", {
   showInFinder: (path) => ipcRenderer.invoke("show-in-finder", path),
   trashItem: (path) => ipcRenderer.invoke("trash-item", path),
   readFile: (path) => ipcRenderer.invoke("read-file", path),
+  pathExists: (path) => ipcRenderer.invoke("path-exists", path),
   writeFile: (filePath, content) => ipcRenderer.invoke("write-file", filePath, content),
   readFileSnapshot: (path) => ipcRenderer.invoke("read-file-snapshot", path),
   writeFileIfUnchanged: (filePath, content, expectedVersion) => ipcRenderer.invoke("write-file-if-unchanged", filePath, content, expectedVersion),

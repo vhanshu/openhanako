@@ -25,6 +25,7 @@ import { StatusBar } from './components/StatusBar';
 import { LeavesOverlay } from './components/LeavesOverlay';
 import { SelectionQuoteActionSurface } from './components/selection/SelectionQuoteActionSurface';
 import { MediaViewer } from './components/shared/MediaViewer/MediaViewer';
+import { ToolCallInspector } from './components/chat/ToolCallInspector';
 import { SettingsModalShell } from './components/SettingsModalShell';
 import { initTheme, initDragPrevention } from './bootstrap';
 import { initApp } from './app-init';
@@ -145,6 +146,9 @@ function App() {
 
       {/* Media viewer overlay */}
       <MediaViewer />
+
+      {/* Tool call detail inspector */}
+      <ToolCallInspector />
 
       {/* In-window settings overlay */}
       <SettingsModalShell />

@@ -27,7 +27,7 @@ describe('chat-find-slice', () => {
   it('setChatFindQuery 置空查询时清空结果', () => {
     useStore.getState().openChatFind(PATH, 'x');
     useStore.getState().setChatFindResults(PATH, {
-      matches: [{ index: 3, exact: true, snippet: 's' }],
+      matches: [{ index: 3, exact: true, snippet: 's', needles: ['x'] }],
       total: 1, tokens: ['x'], truncated: false, bestIndex: 3, revision: 'r1',
     });
     useStore.getState().setChatFindQuery(PATH, '  ');
@@ -41,7 +41,7 @@ describe('chat-find-slice', () => {
   it('setChatFindResults 写入命中并默认 activePos 到最后一条', () => {
     useStore.getState().openChatFind(PATH, 'x');
     useStore.getState().setChatFindResults(PATH, {
-      matches: [{ index: 3, exact: true, snippet: 's' }, { index: 9, exact: false, snippet: 's2' }],
+      matches: [{ index: 3, exact: true, snippet: 's', needles: ['x'] }, { index: 9, exact: false, snippet: 's2', needles: ['x'] }],
       total: 2, tokens: ['x'], truncated: false, bestIndex: 3, revision: 'r1',
     });
     const st = useStore.getState().chatFindBySession[PATH];

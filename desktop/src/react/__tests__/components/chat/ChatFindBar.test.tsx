@@ -239,9 +239,9 @@ describe('ChatFindBar', () => {
       useStore.getState().openChatFind(SESSION, 'hi');
       useStore.getState().setChatFindResults(SESSION, {
         matches: [
-          { index: 1, exact: true, snippet: 'hi 1' },
-          { index: 2, exact: true, snippet: 'hi 2' },
-          { index: 3, exact: true, snippet: 'hi 3' },
+          { index: 1, exact: true, snippet: 'hi 1', needles: ['hi'] },
+          { index: 2, exact: true, snippet: 'hi 2', needles: ['hi'] },
+          { index: 3, exact: true, snippet: 'hi 3', needles: ['hi'] },
         ],
         total: 3,
         tokens: ['hi'],

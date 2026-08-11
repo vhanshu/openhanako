@@ -33,6 +33,16 @@ interface Props {
   showMarkdownPreviewToggle?: boolean;
   markdownPreviewActive?: boolean;
   onToggleMarkdownPreview?: () => void;
+  wordWrap?: boolean;
+  onToggleWordWrap?: () => void;
+  /** html 文件 iframe 预览模式：提供后渲染放大/缩小按钮 */
+  onZoomIn?: () => void;
+  onZoomOut?: () => void;
+  /** html 文件的 edit↔render 切换 */
+  htmlEditMode?: boolean;
+  onToggleHtmlEdit?: () => void;
+  /** 文件不可用（重命名 / 删除）时所有动作按钮统一置灰 */
+  expired?: boolean;
 }
 
 type CoverGenerationStatus = {
@@ -123,6 +133,65 @@ function fileNameFromPath(filePath: string): string {
   return filePath.split(/[\\/]/).filter(Boolean).pop() || 'cover.png';
 }
 
+function CopyIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
+
+function WordWrapIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 6h18" />
+      <path d="M3 12h15a3 3 0 1 1 0 6h-4" />
+      <polyline points="13 16 11 18 13 20" />
+      <path d="M3 18h4" />
+    </svg>
+  );
+}
+
+function ZoomInIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="11" cy="11" r="7" />
+      <line x1="20" y1="20" x2="16" y2="16" />
+      <line x1="11" y1="8" x2="11" y2="14" />
+      <line x1="8" y1="11" x2="14" y2="11" />
+    </svg>
+  );
+}
+
+function ZoomOutIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="11" cy="11" r="7" />
+      <line x1="20" y1="20" x2="16" y2="16" />
+      <line x1="8" y1="11" x2="14" y2="11" />
+    </svg>
+  );
+}
+
+function EditIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+    </svg>
+  );
+}
+
+function EyeIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
 function remoteRefToCoverTarget(ref: RemoteWorkbenchContentRef): WorkbenchMarkdownCoverTarget {
   const normalized = normalizeWorkbenchContentRef(ref);
   return {
@@ -177,6 +246,13 @@ export function FloatingActions({
   showMarkdownPreviewToggle = false,
   markdownPreviewActive = false,
   onToggleMarkdownPreview,
+  wordWrap = false,
+  onToggleWordWrap,
+  onZoomIn,
+  onZoomOut,
+  htmlEditMode = false,
+  onToggleHtmlEdit,
+  expired = false,
 }: Props) {
   const [copyLabel, setCopyLabel] = useState<string | null>(null);
   const [coverBusy, setCoverBusy] = useState(false);
@@ -238,14 +314,16 @@ export function FloatingActions({
     });
   }, [content]);
 
-  const handleScreenshot = useCallback(async () => {
-    const { takeArticleScreenshot } = await import('../../utils/screenshot');
-    await takeArticleScreenshot(content, {
-      filePath,
-      articleType: contentType,
-      language,
-    });
-  }, [content, contentType, filePath, language]);
+  const handleToggleWordWrap = useCallback(() => {
+    onToggleWordWrap?.();
+  }, [onToggleWordWrap]);
+
+  const copyTitle = copyLabel ?? t('attach.copy');
+  const wordWrapTitle = t('preview.wordWrap');
+  const zoomInTitle = t('preview.html.zoomIn');
+  const zoomOutTitle = t('preview.html.zoomOut');
+  const editTitle = t('preview.html.edit');
+  const htmlPreviewTitle = t('preview.html.preview');
 
   const coverNotice = useCallback((key: string, vars?: Record<string, string>) => {
     const translated = t(key, vars);
@@ -428,13 +506,81 @@ export function FloatingActions({
   return (
     <div className={floatingActionsClassName} data-react-managed ref={floatingActionsRef}>
       <div className={styles.floatingActionsSurface}>
-        <button className={styles.actionBtn} onClick={handleCopy}>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-          </svg>
-          <span>{copyLabel ?? t('attach.copy')}</span>
-        </button>
+        {onToggleWordWrap && (
+          <button
+            type="button"
+            className={`${styles.actionBtn}${wordWrap ? ` ${styles.actionBtnActive}` : ''}`}
+            onClick={handleToggleWordWrap}
+            aria-label={wordWrapTitle}
+            aria-pressed={wordWrap}
+            title={wordWrapTitle}
+            disabled={expired}
+          >
+            <WordWrapIcon />
+          </button>
+        )}
+        {/* html 文件编辑模式下提供一个"预览"图标，与 wrap 按钮并列 */}
+        {onToggleHtmlEdit && htmlEditMode && (
+          <button
+            type="button"
+            className={styles.actionBtn}
+            onClick={onToggleHtmlEdit}
+            aria-label={htmlPreviewTitle}
+            title={htmlPreviewTitle}
+            disabled={expired}
+          >
+            <EyeIcon />
+          </button>
+        )}
+        {/* html 渲染模式下隐藏 copy：预览场景用户能直接看文档，复制正文没意义 */}
+        {!(onToggleHtmlEdit && !htmlEditMode) && (
+          <button
+            className={styles.actionBtn}
+            onClick={handleCopy}
+            aria-label={copyTitle}
+            title={copyTitle}
+            disabled={expired}
+          >
+            <CopyIcon />
+          </button>
+        )}
+        {/* html 文件渲染模式下：缩小、放大、编辑 */}
+        {onZoomOut && (
+          <button
+            type="button"
+            className={styles.actionBtn}
+            onClick={onZoomOut}
+            aria-label={zoomOutTitle}
+            title={zoomOutTitle}
+            disabled={expired}
+          >
+            <ZoomOutIcon />
+          </button>
+        )}
+        {onZoomIn && (
+          <button
+            type="button"
+            className={styles.actionBtn}
+            onClick={onZoomIn}
+            aria-label={zoomInTitle}
+            title={zoomInTitle}
+            disabled={expired}
+          >
+            <ZoomInIcon />
+          </button>
+        )}
+        {onToggleHtmlEdit && !htmlEditMode && (
+          <button
+            type="button"
+            className={styles.actionBtn}
+            onClick={onToggleHtmlEdit}
+            aria-label={editTitle}
+            title={editTitle}
+            disabled={expired}
+          >
+            <EditIcon />
+          </button>
+        )}
         {contentType === 'markdown' && coverTarget && systemCoverAvailable && (
           <div className={styles.coverActionWrap} ref={coverMenuRef}>
             <Tooltip content={t('cover.make')} placement="top" align="end">
@@ -444,7 +590,7 @@ export function FloatingActions({
                   className={`${styles.actionBtn}${coverBusy ? ` ${styles.actionBtnBusy}` : ''}${coverMenuOpen ? ` ${styles.actionBtnActive}` : ''}`}
                   onClick={() => setCoverMenuOpen(open => !open)}
                   aria-label={t('cover.make')}
-                  disabled={coverBusy}
+                  disabled={coverBusy || expired}
                   {...tooltipProps}
                 >
                   <CoverPaletteIcon />
@@ -544,6 +690,7 @@ export function FloatingActions({
                 className={`${styles.actionBtn}${markdownPreviewActive ? ` ${styles.actionBtnActive}` : ''}`}
                 onClick={onToggleMarkdownPreview}
                 aria-label={t('preview.markdownPreview')}
+                disabled={expired}
                 {...tooltipProps}
               >
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -562,23 +709,6 @@ export function FloatingActions({
           hidden
           onChange={handleBrowserCoverInputChange}
         />
-        <Tooltip content={t('common.screenshot')} placement="top" align="end">
-          {({ ref, ...tooltipProps }) => (
-            <button
-              ref={(node) => ref(node)}
-              className={styles.actionBtn}
-              onClick={handleScreenshot}
-              aria-label={t('common.screenshot')}
-              {...tooltipProps}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
-                <circle cx="12" cy="13" r="4" />
-              </svg>
-            </button>
-          )}
-        </Tooltip>
       </div>
     </div>
   );

@@ -713,9 +713,9 @@
       "failed": "💻 {name}'s computer didn't cooperate"
     },
     "read": {
-      "running": "📖 {name} is flipping through a file",
-      "done": "📖 {name} done flipping",
-      "failed": "📖 {name} found nothing there"
+      "running": "📖 {name} is reading a file",
+      "done": "📖 {name} finished reading",
+      "failed": "📖 {name} couldn't read it"
     },
     "write": {
       "running": "✏️ {name} is putting pen to paper",
@@ -903,6 +903,27 @@
       "running": "🔧 {name} is busy working…",
       "done": "🔧 {name} all done",
       "failed": "🔧 {name} that didn't go as planned"
+    },
+    "inspector": {
+      "eyebrow": "Tool call",
+      "ariaLabel": "Tool call details: {name}",
+      "close": "Close",
+      "status": "Status",
+      "id": "Call ID",
+      "session": "Session",
+      "error": "Error",
+      "args": "Arguments",
+      "details": "Metadata",
+      "result": "Result",
+      "resultLoading": "Loading result…",
+      "resultUnavailable": "No result available.",
+      "resultTooLarge": "Result is large ({total} bytes) and exceeds the inline preview limit ({limit} bytes). Download as .txt to view the full content.",
+      "downloadAsTxt": "Download as .txt",
+      "resultTruncated": "Result truncated ({shown} / {total} bytes)",
+      "empty": "(empty)",
+      "copy": "Copy",
+      "copied": "Copied",
+      "openPathTitle": "Click to open with default app: {path}"
     },
     "checkDeferred": {
       "storeNotInitialized": "Deferred task store not initialized.",
@@ -3437,6 +3458,13 @@
       "saveImage": "Save image",
       "regenerateWithPrompt": "Generate image with custom prompt",
       "deleteCover": "Delete cover"
+    },
+    "wordWrap": "Word Wrap",
+    "html": {
+      "zoomIn": "Zoom In",
+      "zoomOut": "Zoom Out",
+      "edit": "Edit",
+      "preview": "Preview"
     }
   },
   "mediaViewer": {

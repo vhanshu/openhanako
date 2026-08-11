@@ -47,7 +47,10 @@ describe("HTML preview route", () => {
     expect(csp).toContain("media-src 'self' https: data: blob:");
     expect(csp).toContain("connect-src 'none'");
     expect(csp).not.toContain("script-src 'self'");
-    expect(await rendered.text()).toBe(html);
+    // 片段会被包成完整 HTML 壳，里面包含原 content 和注入的 scrollbar style
+    const renderedText = await rendered.text();
+    expect(renderedText).toContain(html);
+    expect(renderedText).toContain('::-webkit-scrollbar{width:6px');
   });
 
   it("adds a token-scoped asset base for HTML files so relative attachment images load through the preview route", async () => {

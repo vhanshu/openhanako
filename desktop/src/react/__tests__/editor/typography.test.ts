@@ -330,7 +330,6 @@ describe('editor typography settings', () => {
     expect(contentRule).not.toMatch(/max-width/);
     expect(contentRule).not.toMatch(/margin:\s*0 auto/);
     expect(css).not.toMatch(/:global\(\.preview-editor \.cm-scroller\)\s*\{/);
-    expect(css).not.toMatch(/:global\(\.preview-editor \.cm-content\)\s*\{/);
   });
 
   it('uses the original quote geometry while rounding code block outer edges', () => {

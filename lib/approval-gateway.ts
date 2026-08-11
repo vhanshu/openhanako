@@ -78,13 +78,13 @@ function deterministicDecision(request: any = {}) {
 function isDeferredMutationDraft(request: any = {}) {
   const sideEffect = request.sideEffect;
   return sideEffect?.kind === "deferred_mutation_draft"
-    && sideEffect?.commit === "requires_user_confirmation";
+      && sideEffect?.commit === "requires_user_confirmation";
 }
 
 function normalizeRisk(value, fallback = "medium") {
   return value === "low" || value === "medium" || value === "high" || value === "critical"
-    ? value
-    : fallback;
+      ? value
+      : fallback;
 }
 
 function normalizeReviewerDecision(raw, reviewer) {
@@ -125,17 +125,17 @@ function normalizeReviewerDecision(raw, reviewer) {
 
 function normalizeReviewerText(value, fallback) {
   const normalized = typeof value === "string"
-    ? value.replace(/\s+/g, " ").trim()
-    : "";
+      ? value.replace(/\s+/g, " ").trim()
+      : "";
   return (normalized || fallback).slice(0, MAX_REVIEWER_REASON_LENGTH);
 }
 
 function normalizeRuleIds(value) {
   if (!Array.isArray(value)) return [];
   return value
-    .filter((item) => typeof item === "string" && item.trim())
-    .slice(0, 12)
-    .map((item) => item.trim().slice(0, 120));
+      .filter((item) => typeof item === "string" && item.trim())
+      .slice(0, 12)
+      .map((item) => item.trim().slice(0, 120));
 }
 
 function reviewerDecisionReasonCode(action) {
@@ -157,7 +157,7 @@ function reviewerFailureSummary(result) {
 function fallbackAskUser(failures: ReviewerFailure[] = []) {
   const summaries = failures.map(reviewerFailureSummary);
   const unavailable = summaries.length === 0
-    || summaries.every((failure) => failure.reasonCode === "reviewer_not_configured");
+      || summaries.every((failure) => failure.reasonCode === "reviewer_not_configured");
   const reasonCode = unavailable ? "approval_reviewer_unavailable" : "approval_review_failed";
   return {
     action: "ask_user",
@@ -276,12 +276,12 @@ function configForReviewerRole(config, role) {
 }
 
 export function createModelApprovalReviewer({
-  role = "utility",
-  resolveUtilityConfig,
-  callText,
-  timeoutMs = 15_000,
-  maxTokens = 220,
-}: any = {}) {
+                                              role = "utility",
+                                              resolveUtilityConfig,
+                                              callText,
+                                              timeoutMs = 15_000,
+                                              maxTokens = 220,
+                                            }: any = {}) {
   return async (input) => {
     if (typeof resolveUtilityConfig !== "function") {
       return failureResult("reviewer_not_configured", 0);
@@ -344,28 +344,28 @@ export function createModelApprovalReviewer({
 
 function sanitizeReturnedFailure(raw, attempts): ReviewerFailure {
   const reasonCode = REVIEWER_FAILURE_CODES.has(raw?.reasonCode)
-    ? raw.reasonCode
-    : "reviewer_internal_error";
+      ? raw.reasonCode
+      : "reviewer_internal_error";
   const errorCode = typeof raw?.errorCode === "string" && SAFE_ERROR_CODES.has(raw.errorCode)
-    ? raw.errorCode
-    : undefined;
+      ? raw.errorCode
+      : undefined;
   const normalizedAttempts = Number.isInteger(raw?.attempts) && raw.attempts >= 0
-    ? Math.min(raw.attempts, 2)
-    : attempts;
+      ? Math.min(raw.attempts, 2)
+      : attempts;
   return failureResult(reasonCode, normalizedAttempts, errorCode);
 }
 
 function normalizeReviewerReturn(raw, reviewer: ReviewerId, attempts): ReviewerAttemptResult {
   if (raw?.kind === "failure") return sanitizeReturnedFailure(raw, attempts);
   const returnedAttempts = raw?.kind === "decision" && Number.isInteger(raw.attempts)
-    ? Math.min(Math.max(raw.attempts, 1), 2)
-    : attempts;
+      ? Math.min(Math.max(raw.attempts, 1), 2)
+      : attempts;
   const candidate = raw?.kind === "decision" ? raw.decision : raw;
   if (typeof candidate === "string" || candidate == null) {
     return parseReviewerOutput(
-      typeof candidate === "string" ? candidate : "",
-      reviewer === "large_tool_model" ? "utility_large" : "utility",
-      returnedAttempts,
+        typeof candidate === "string" ? candidate : "",
+        reviewer === "large_tool_model" ? "utility_large" : "utility",
+        returnedAttempts,
     );
   }
   const decision = normalizeReviewerDecision(candidate, reviewer);
@@ -376,7 +376,7 @@ function normalizeReviewerReturn(raw, reviewer: ReviewerId, attempts): ReviewerA
 function logReviewerFailure(result: ReviewerFailure) {
   const errorCode = result.errorCode ? ` errorCode=${result.errorCode}` : "";
   reviewerLog.warn(
-    `reviewer=${result.reviewer || "unknown"} outcome=failure reasonCode=${result.reasonCode} attempts=${result.attempts}${errorCode}`,
+      `reviewer=${result.reviewer || "unknown"} outcome=failure reasonCode=${result.reasonCode} attempts=${result.attempts}${errorCode}`,
   );
 }
 
@@ -389,8 +389,8 @@ async function callReviewer(fn, input, reviewer: ReviewerId) {
     let result: ReviewerAttemptResult;
     try {
       const raw = attempt > 1
-        ? await fn(input, { attempt, formatCorrection: priorFormatFailure })
-        : await fn(input);
+          ? await fn(input, { attempt, formatCorrection: priorFormatFailure })
+          : await fn(input);
       result = normalizeReviewerReturn(raw, reviewer, attempt);
     } catch (error) {
       result = failureFromError(error, attempt, "call");
@@ -411,8 +411,8 @@ async function callReviewer(fn, input, reviewer: ReviewerId) {
 
 function isLowRiskAllow(result) {
   return result?.kind === "decision"
-    && result.decision?.action === "allow"
-    && result.decision.risk === "low";
+      && result.decision?.action === "allow"
+      && result.decision.risk === "low";
 }
 
 function isAllowedReviewerAction(result) {
@@ -436,9 +436,9 @@ function decisionWithFailures(result, ...failures) {
 }
 
 export function createApprovalGateway({
-  smallToolModelReviewer = null,
-  largeToolModelReviewer = null,
-} = {}) {
+                                        smallToolModelReviewer = null,
+                                        largeToolModelReviewer = null,
+                                      } = {}) {
   return {
     async review(request, context = {}) {
       const policyDecision = deterministicDecision(request);
@@ -446,9 +446,9 @@ export function createApprovalGateway({
 
       const reviewerInput = buildReviewerInput(request, context);
       const smallDecision = await callReviewer(
-        smallToolModelReviewer,
-        reviewerInput,
-        "small_tool_model",
+          smallToolModelReviewer,
+          reviewerInput,
+          "small_tool_model",
       );
       const hasLargeReviewer = typeof largeToolModelReviewer === "function";
       if (isLowRiskAllow(smallDecision)) {
@@ -459,9 +459,9 @@ export function createApprovalGateway({
       }
 
       const largeDecision = await callReviewer(
-        largeToolModelReviewer,
-        reviewerInput,
-        "large_tool_model",
+          largeToolModelReviewer,
+          reviewerInput,
+          "large_tool_model",
       );
       if (isAllowedReviewerAction(largeDecision)) {
         return decisionWithFailures(largeDecision, smallDecision);

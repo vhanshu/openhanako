@@ -73,10 +73,37 @@ export class CodeBlockToolbarWidget extends WidgetType {
       toolbar.appendChild(lang);
     }
 
+    // wrap 按钮：点击后给当前代码块所有行加 data-wrap="true"，由 CSS 切换 white-space
+    const wrapBtn = document.createElement('button');
+    wrapBtn.type = 'button';
+    wrapBtn.className = 'cm-codeblock-wrap-btn';
+    wrapBtn.setAttribute('aria-label', t('codeBlock.wordWrap'));
+    wrapBtn.setAttribute('aria-pressed', 'false');
+    wrapBtn.dataset.active = 'false';
+
+    const wrapIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    wrapIcon.setAttribute('class', 'cm-codeblock-wrap-icon');
+    wrapIcon.setAttribute('viewBox', '0 0 24 24');
+    wrapIcon.setAttribute('fill', 'none');
+    wrapIcon.setAttribute('stroke', 'currentColor');
+    wrapIcon.setAttribute('stroke-width', '1.7');
+    wrapIcon.setAttribute('stroke-linecap', 'round');
+    wrapIcon.setAttribute('stroke-linejoin', 'round');
+    wrapIcon.setAttribute('aria-hidden', 'true');
+    const wrapLineTop = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    wrapLineTop.setAttribute('d', 'M3 6h18');
+    const wrapTurn = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    wrapTurn.setAttribute('d', 'M3 12h15a3 3 0 1 1 0 6h-4');
+    const wrapArrow = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+    wrapArrow.setAttribute('points', '13 16 11 18 13 20');
+    const wrapLineBottom = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    wrapLineBottom.setAttribute('d', 'M3 18h4');
+    wrapIcon.append(wrapLineTop, wrapTurn, wrapArrow, wrapLineBottom);
+    wrapBtn.appendChild(wrapIcon);
+
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'cm-codeblock-copy-btn';
-    button.title = t('attach.copy');
     button.setAttribute('aria-label', t('attach.copy'));
 
     const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -97,11 +124,7 @@ export class CodeBlockToolbarWidget extends WidgetType {
     pathFront.setAttribute('d', 'M6 16H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1');
     icon.append(rectBack, pathFront);
 
-    const label = document.createElement('span');
-    label.className = 'cm-codeblock-copy-label';
-    label.textContent = t('attach.copy');
-
-    button.append(icon, label);
+    button.append(icon);
     button.addEventListener('mousedown', (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -111,18 +134,14 @@ export class CodeBlockToolbarWidget extends WidgetType {
       event.stopPropagation();
       const resetLabel = () => {
         button.dataset.copied = 'false';
-        button.title = t('attach.copy');
         button.setAttribute('aria-label', t('attach.copy'));
-        label.textContent = t('attach.copy');
       };
       const writePromise = navigator.clipboard?.writeText?.(this.text);
       if (!writePromise) return;
       writePromise
         .then(() => {
           button.dataset.copied = 'true';
-          button.title = t('attach.copied');
           button.setAttribute('aria-label', t('attach.copied'));
-          label.textContent = t('attach.copied');
           window.setTimeout(resetLabel, 1500);
         })
         .catch((err: unknown) => {
@@ -130,7 +149,26 @@ export class CodeBlockToolbarWidget extends WidgetType {
         });
     });
 
-    toolbar.appendChild(button);
+    // wrap 按钮点击：找到当前 fenced block 的所有 cm-codeblock-line，切换 data-wrap
+    wrapBtn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const active = wrapBtn.dataset.active === 'true';
+      const next = !active;
+      wrapBtn.dataset.active = next ? 'true' : 'false';
+      wrapBtn.setAttribute('aria-pressed', next ? 'true' : 'false');
+      const content = toolbar.closest('.cm-content');
+      const codeLines = content?.querySelectorAll('.cm-codeblock-line') ?? [];
+      codeLines.forEach((line) => {
+        if (next) {
+          (line as HTMLElement).dataset.wrap = 'true';
+        } else {
+          delete (line as HTMLElement).dataset.wrap;
+        }
+      });
+    });
+
+    toolbar.append(wrapBtn, button);
     return toolbar;
   }
 }

@@ -51,4 +51,29 @@ describe('FileOutputActions screenshot share', () => {
 
     expect(screen.queryByText('截图分享')).not.toBeInTheDocument();
   });
+
+  it('keeps copy path enabled and grays out every other action when disabled', () => {
+    render(
+      <FileOutputActions
+        filePath="/tmp/session-files/a1b2c3"
+        displayName="report.md"
+        downloadUrl="/dl/report.md"
+        downloadName="report.md"
+        disabled
+      />,
+    );
+
+    // 主按钮 disabled，但下拉触发器要可用——否则菜单打不开、复制路径也用不了
+    expect(screen.getByLabelText('用默认应用打开 report.md')).toBeDisabled();
+    const trigger = screen.getByRole('button', { name: '更多文件操作 report.md' });
+    expect(trigger).not.toBeDisabled();
+
+    fireEvent.click(trigger);
+    const downloadItem = screen.getByText('下载到本机').closest('a');
+    const screenshotItem = screen.getByText('截图分享').closest('button');
+    const copyItem = screen.getByText('复制文件路径').closest('button');
+    expect(downloadItem).toHaveAttribute('aria-disabled', 'true');
+    expect(screenshotItem).toBeDisabled();
+    expect(copyItem).not.toBeDisabled();
+  });
 });

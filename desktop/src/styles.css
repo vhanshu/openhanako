@@ -1042,6 +1042,9 @@ html[data-platform="linux"] .tb-toggle-right {
     margin: var(--space-4) 0;
     overflow-x: auto;
     line-height: 1.5;
+    /* 代码块里的 tab 用 4 空格宽；浏览器默认 8 在 monospace 下太宽，会接断对齐。 */
+    tab-size: 4;
+    -moz-tab-size: 4;
 }
 
 /* 代码块 wrapper：非滚动定位祖先，让复制按钮锚在可视区右上角不随横滚漂移 */
@@ -1103,7 +1106,7 @@ html[data-platform="linux"] .tb-toggle-right {
     height: var(--code-block-toolbar-size);
     padding: 0;
     cursor: default;
-    opacity: 0.35;
+    opacity: 0.6;
     transition: opacity var(--duration-fast), color var(--duration-fast);
 }
 

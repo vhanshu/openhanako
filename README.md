@@ -1,3 +1,14 @@
+---
+cover:
+  image: 文本附件/README-cover-20260811-105713.jpg
+  actualRatio: '16:9'
+  pixelWidth: 2000
+  pixelHeight: 1125
+  displayWidth: 100
+  displayHeight: 320
+  positionX: 50
+  positionY: 0
+---
 <p align="center">
   <img src=".github/assets/banner.jpg" width="100%" alt="HanaAgent Banner">
 </p>

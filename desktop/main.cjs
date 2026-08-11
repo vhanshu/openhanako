@@ -5687,6 +5687,15 @@ wrapIpcHandler("read-file", (_event, filePath) => {
   } catch { return null; }
 });
 
+// 轻量级路径存在性检查。用于“本机重命名后文件不可用”之类场景，调用方在
+// 打开预览前先 stat 一次，避免误开不存在的文件。
+wrapIpcHandler("path-exists", (_event, filePath) => {
+  if (!filePath || !path.isAbsolute(filePath)) return false;
+  try {
+    return fs.existsSync(filePath);
+  } catch { return false; }
+});
+
 wrapIpcHandler("read-file-snapshot", (_event, filePath) => {
   if (!filePath || !path.isAbsolute(filePath)) return null;
   try {

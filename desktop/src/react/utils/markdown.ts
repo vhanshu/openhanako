@@ -956,8 +956,8 @@ function applyMarkdownPlugins(md: MarkdownItInstance): void {
   md.use(markdownHeadingAnchors);
   md.use(trimAutoLinkifiedSuffixes);
   md.use(unwrapLocalFileAutoLinks);
-  md.use(mermaidFences);
   md.use(highlightCodeFences);
+  md.use(mermaidFences);
   md.use(markdownImageRenderer);
   md.use(markdownTableScrollWrapper);
 }

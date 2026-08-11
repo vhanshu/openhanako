@@ -1272,6 +1272,126 @@ export function createSessionsRoute(engine, hub = null) {
     }
   });
 
+  // 获取单条工具调用的完整执行结果（按 toolCallId 查 toolResult 条目）。
+  // session JSONL 里的 role:"toolResult" 包含完整 content；前端 tool_end 协议
+  // 只广播 details 不广播 content（避免传输大文件 / 二进制），所以这个接缝
+  // 是前端工具详情抽屉按需拉取的来源。
+  // 大小策略：
+  //   - 默认不截断，工具结果（read / grep / describe 等）通常几 KB ~ 几十 KB。
+  //   - 内联预览上限 2 MB；超过则不返 text，仅返回 status:"too_large" 元数据，
+  //     前端走 ?download=1 拿 .txt 文件下载。
+  //   - 下载模式（?download=1）始终返回完整内容，不受 2 MB 限制。
+  const TOOL_RESULT_INLINE_LIMIT_BYTES = 2 * 1024 * 1024; // 2 MB
+
+  function buildToolResultFilename(toolName, toolCallId) {
+    const safeName = (toolName || "tool").replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 60) || "tool";
+    const safeId = (toolCallId || "unknown").replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 60);
+    return `tool-result-${safeName}-${safeId}.txt`;
+  }
+
+  function extractToolResultText(matched) {
+    const content = Array.isArray(matched.content) ? matched.content : [];
+    const textParts = [];
+    for (const block of content) {
+      if (!block) continue;
+      if (block.type === "text" && typeof block.text === "string") {
+        textParts.push(block.text);
+      }
+    }
+    return textParts.join("\n");
+  }
+
+  route.get("/sessions/tool-result", async (c) => {
+    try {
+      const requestContext = createRequestContext(c, engine);
+      const sessionPath = c.req.query("sessionPath") || c.req.query("path") || null;
+      const toolCallId = c.req.query("toolCallId") || c.req.query("id") || null;
+      if (!sessionPath) {
+        return c.json({ error: t("error.missingParam", { param: "sessionPath" }) }, 400);
+      }
+      if (!toolCallId) {
+        return c.json({ error: t("error.missingParam", { param: "toolCallId" }) }, 400);
+      }
+      if (!isValidSessionPath(sessionPath, engine.agentsDir)) {
+        return c.json({ error: "Invalid session path" }, 403);
+      }
+      const auth = authorizeSessionRoute(requestContext, "sessions.read", {
+        kind: "session",
+        studioId: requestContext.studioId,
+        sessionPath,
+      });
+      if (!auth.allowed) return c.json({ error: "insufficient_scope", reason: auth.reason }, 403);
+
+      const messages = await loadSessionHistoryMessages(engine, sessionPath);
+      const matched = messages.find((m) => m?.role === "toolResult" && typeof m.toolCallId === "string" && m.toolCallId === toolCallId);
+      if (!matched) {
+        return c.json({
+          status: "unavailable",
+          reason: "tool-result not found in session history",
+          toolCallId,
+        });
+      }
+
+      const rawText = extractToolResultText(matched);
+      const totalBytes = Buffer.byteLength(rawText, "utf8");
+      const toolName = typeof matched.toolName === "string" ? matched.toolName : null;
+      const isError = matched.isError === true;
+      const errorText = (() => {
+        const details = matched.details;
+        if (details && typeof details === "object") {
+          if (typeof details.error === "string") return details.error;
+        }
+        return undefined;
+      })();
+
+      const wantDownload = c.req.query("download") === "1" || c.req.query("download") === "true";
+
+      // 下载模式：返回完整 .txt，不受 2 MB 限制。Content-Disposition 触发浏览器保存。
+      if (wantDownload) {
+        const filename = buildToolResultFilename(toolName, toolCallId);
+        return new Response(rawText, {
+          status: 200,
+          headers: {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Content-Disposition": `attachment; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+            "X-Tool-Result-Total-Bytes": String(totalBytes),
+            ...(toolName ? { "X-Tool-Result-Tool-Name": toolName } : {}),
+            ...(errorText ? { "X-Tool-Result-Error": errorText } : {}),
+          },
+        });
+      }
+
+      // 内联预览：超 2 MB 不返 text，仅告知前端走下载。
+      if (totalBytes > TOOL_RESULT_INLINE_LIMIT_BYTES) {
+        return c.json({
+          status: "too_large",
+          toolCallId,
+          toolName,
+          totalBytes,
+          inlineLimitBytes: TOOL_RESULT_INLINE_LIMIT_BYTES,
+          isError,
+          ...(errorText ? { error: errorText } : {}),
+          details: matched.details ?? null,
+        });
+      }
+
+      return c.json({
+        status: "available",
+        toolCallId,
+        toolName,
+        isError,
+        text: rawText,
+        truncated: false,
+        totalBytes,
+        ...(errorText ? { error: errorText } : {}),
+        details: matched.details ?? null,
+      });
+    } catch (err) {
+      log.error(`tool-result failed: ${err?.stack || err}`);
+      return c.json({ error: err?.message || String(err) }, 500);
+    }
+  });
+
   // 获取 session 的消息（支持 ?path= 指定 session，否则读焦点 session）
   route.get("/sessions/messages", async (c) => {
     try {

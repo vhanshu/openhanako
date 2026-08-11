@@ -3357,6 +3357,13 @@
       "saveImage": "画像を保存",
       "regenerateWithPrompt": "カスタムプロンプトで画像を生成",
       "deleteCover": "カバーを削除"
+    },
+    "wordWrap": "折り返し",
+    "html": {
+      "zoomIn": "拡大",
+      "zoomOut": "縮小",
+      "edit": "編集",
+      "preview": "プレビュー"
     }
   },
   "subagent": {

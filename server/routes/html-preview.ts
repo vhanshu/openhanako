@@ -103,7 +103,34 @@ function servePreview(c, previews, currentTime, headOnly = false) {
   c.header("Cache-Control", "no-store");
   c.header("Cross-Origin-Resource-Policy", "cross-origin");
 
-  return c.body(headOnly ? null : preview.content);
+  return c.body(headOnly ? null : injectScrollbarStyle(preview.content));
+}
+
+/**
+ * 往 server 渲染的 HTML 临时文档里注入 webkit 滚动条收紧样式。
+ * 原内容可能是完整 HTML（含 <head>）或片段，分别处理：
+ * - 含 <head>：在 </head> 前插入 style（保持原文档结构）
+ * - 不含 <head>：包一层完整外壳
+ * 收紧滚动条，避免 Windows Chromium 默认的 15px 粗滚动条。
+ */
+function injectScrollbarStyle(content: string): string {
+  const styleBlock =
+    '<style>*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;' +
+    'scrollbar-width:thin;scrollbar-color:rgba(128,128,128,0.25) transparent}' +
+    '*::-webkit-scrollbar{width:6px;height:6px}' +
+    '*::-webkit-scrollbar-track{background:transparent}' +
+    '*::-webkit-scrollbar-thumb{background:rgba(128,128,128,0.25);border-radius:3px}' +
+    '*::-webkit-scrollbar-thumb:hover{background:rgba(128,128,128,0.45)}' +
+    '*::-webkit-scrollbar-corner{background:transparent}</style>';
+
+  if (/<head[\s>]/i.test(content)) {
+    if (/<\/head>/i.test(content)) {
+      return content.replace(/<\/head>/i, `${styleBlock}</head>`);
+    }
+    return content.replace(/<head[\s>][^>]*>/i, (m) => `${m}${styleBlock}`);
+  }
+
+  return `<!doctype html><html><head><meta charset="utf-8">${styleBlock}</head><body>${content}</body></html>`;
 }
 
 function servePreviewAsset(c, previews, currentTime, maxAssetBytes, headOnly = false) {

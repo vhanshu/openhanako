@@ -24,9 +24,40 @@ describe("findInSessionMessages", () => {
   it("整句命中标记 exact 并给出 bestIndex", () => {
     const r = findInSessionMessages(entries, "聊天记录");
     expect(r.total).toBe(1);
-    expect(r.matches[0]).toMatchObject({ index: 5, exact: true });
+    expect(r.matches[0]).toMatchObject({ index: 5, exact: true, needles: ["聊天记录"] });
     expect(r.bestIndex).toBe(5);
     expect(r.matches[0].snippet).toContain("聊天记录");
+  });
+
+  it("exact 命中：needles 等于 query 整串，前端按此 mark 避免子串误标", () => {
+    const r = findInSessionMessages(entries, "聊天记录");
+    expect(r.matches.every((m) => m.needles.length === 1 && m.needles[0] === "聊天记录"))
+      .toBe(true);
+  });
+
+  it("exact 优先：整串命中数 ≥ 1 时不跑 token 模糊，单 token 命中被丢弃", () => {
+    const e = [
+      { index: 1, text: "go mod init jwt-demo" },           // 整串命中
+      { index: 2, text: "go get github.com/golang-jwt/jwt/v5" }, // 只含 "go"
+      { index: 3, text: "go run main.go" },                  // 只含 "go"
+      { index: 4, text: "go lang.org/x/crypto/bcrypt" },    // 只含 "go"
+    ];
+    const r = findInSessionMessages(e, "go mod");
+    expect(r.total).toBe(1);
+    expect(r.matches.map((m) => m.index)).toEqual([1]);
+    expect(r.matches[0].exact).toBe(true);
+    expect(r.bestIndex).toBe(1);
+  });
+
+  it("exact 优先：多个整串命中时全部返回", () => {
+    const e = [
+      { index: 1, text: "go mod tidy" },
+      { index: 2, text: "go mod init jwt-demo" },
+      { index: 3, text: "go run main.go" }, // 只含 "go"，应被丢弃
+    ];
+    const r = findInSessionMessages(e, "go mod");
+    expect(r.total).toBe(2);
+    expect(r.matches.map((m) => m.index)).toEqual([1, 2]);
   });
 
   it("normalize：大小写不敏感 + NFKC 全角规整", () => {
@@ -41,6 +72,15 @@ describe("findInSessionMessages", () => {
     expect(r.matches.map((m) => m.index)).toContain(0);
     expect(r.matches.map((m) => m.index)).toContain(5);
     expect(r.bestIndex).toBe(0);
+  });
+
+  it("fallback token 命中：needles 是该 entry 内所有命中过的 token（前端 mark 按逐个标）", () => {
+    const r = findInSessionMessages(entries, "session_search 定位");
+    const byIndex = new Map(r.matches.map((m) => [m.index, m.needles]));
+    // entries[0] 含 "session_search" → needles 含 "session_search"
+    expect(byIndex.get(0)).toContain("session_search");
+    // entries[5] 含 "定位" → needles 含 "定位"
+    expect(byIndex.get(5)).toContain("定位");
   });
 
   it("token 可搜索性门槛：单字符 ASCII 与裸数字不进入 tokens、不产生误命中", () => {

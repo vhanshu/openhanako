@@ -110,6 +110,11 @@ export interface PreviewEditorProps {
   contentHash?: string;
   onScrollSnapshotChange?: (snapshot: PreviewScrollSnapshot, topVisibleLine: number) => void;
   /**
+   * 是否启用软换行（超长行在容器边缘折行显示）。
+   * 默认关闭：窄侧栏里保持原行宽，超出部分横向滚动，避免阅读时被截断换行。
+   */
+  wordWrap?: boolean;
+  /**
    * 只读模式：禁用编辑、不挂 autosave listener。
    * 调用方（如派生 viewer 窗口）自己把新 content 作为 prop 传入即可。
    */
@@ -389,7 +394,7 @@ function isEditorCoverRailDrop(view: EditorView, event: DragEvent): boolean {
 /* ── Editor Component ── */
 
 export const PreviewEditor = forwardRef<PreviewEditorHandle, PreviewEditorProps>(
-  function PreviewEditor({ content, filePath, remoteContentRef, fileVersion, saveDocument, mode, language, onSelectionChange, onSelectionCommit, onQuoteRange, onStatsChange, onContentChange, initialScrollSnapshot, contentHash, onScrollSnapshotChange, readOnly = false }, ref) {
+  function PreviewEditor({ content, filePath, remoteContentRef, fileVersion, saveDocument, mode, language, onSelectionChange, onSelectionCommit, onQuoteRange, onStatsChange, onContentChange, initialScrollSnapshot, contentHash, onScrollSnapshotChange, wordWrap = false, readOnly = false }, ref) {
     const incomingFileVersionKey = fileVersionIdentity(fileVersion ?? null);
     const containerRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
@@ -452,6 +457,7 @@ export const PreviewEditor = forwardRef<PreviewEditorHandle, PreviewEditorProps>
       gutter: new Compartment(),
       conceal: new Compartment(),
       theme: new Compartment(),
+      wrap: new Compartment(),
     });
 
     useLayoutEffect(() => {
@@ -768,7 +774,9 @@ export const PreviewEditor = forwardRef<PreviewEditorHandle, PreviewEditorProps>
         bracketMatching(),
         keymap.of([...defaultKeymap, ...historyKeymap]),
         EditorView.contentAttributes.of({ spellcheck: 'false' }),
-        EditorView.lineWrapping,
+        // markdown 模式始终启用折行（依赖 max-width 容器随侧栏变窄自动折），
+        // code 模式才由 wordWrap toggle 决定是否启用
+        c.wrap.of((isMd || wordWrap) ? [EditorView.lineWrapping] : []),
         ...(isMd && !readOnly ? [
           EditorView.domEventHandlers({
             dragover(event) {
@@ -952,8 +960,14 @@ export const PreviewEditor = forwardRef<PreviewEditorHandle, PreviewEditorProps>
       // markdown 模式在 c.lang.of 里同步挂了语法解析器，不走这里。
       if (!isMd && language) {
         const langKey = language.toLowerCase();
+        // @codemirror/language-data 里不少语言（Python、Rust、C 头文件等）只在
+        // extensions 数组里挂扩展名，没有 alias 字段。language prop 从 filePath
+        // 推过来是 ext（如 "py"），所以这里要把 extensions 也纳入匹配，否则
+        // 找不到 parser、编辑栏不会有高亮。
         const langDef = languages.find(
-          (l) => l.name.toLowerCase() === langKey || l.alias?.includes(langKey),
+          (l) => l.name.toLowerCase() === langKey
+            || l.alias?.includes(langKey)
+            || l.extensions?.includes(langKey),
         );
         if (langDef) {
           langDef.load()
@@ -1024,12 +1038,23 @@ export const PreviewEditor = forwardRef<PreviewEditorHandle, PreviewEditorProps>
       applyIncomingContent(content, { publish: versionChanged });
     }, [content, incomingFileVersionKey, applyIncomingContent]);
 
+    // wordWrap toggle → reconfigure wrap compartment (不重建 CodeMirror)
+    // markdown 模式固定折行，不受 wordWrap toggle 影响
+    useEffect(() => {
+      const view = viewRef.current;
+      if (!view) return;
+      if (mode === 'markdown') return;
+      view.dispatch({
+        effects: cRef.current.wrap.reconfigure(wordWrap ? [EditorView.lineWrapping] : []),
+      });
+    }, [wordWrap, mode]);
+
     const getViewForMenu = useCallback(() => viewRef.current, []);
     const closeBlockMenu = useCallback(() => setBlockMenuRequest(null), []);
 
     return (
       <Fragment>
-        <div className={`preview-editor mode-${mode}`} ref={containerRef} />
+        <div className={`preview-editor mode-${mode}`} data-wrap={wordWrap ? 'true' : 'false'} ref={containerRef} />
         <EditorContextMenu
           getView={getViewForMenu}
           containerRef={containerRef}

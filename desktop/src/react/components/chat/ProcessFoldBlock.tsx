@@ -1,4 +1,4 @@
-import { memo, useCallback, useId, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { Collapse } from '@/ui';
 import { AgentAvatar, type AgentDisplayInfo } from '../../utils/agent-display';
 import { AssistantMessage } from './AssistantMessage';
@@ -10,6 +10,8 @@ import type {
   SessionNodeTarget,
 } from '../../stores/message-turn-actions';
 import type { ChatMessage } from '../../stores/chat-types';
+import { useStore } from '../../stores';
+import { sessionScopedValue } from '../../stores/session-slice';
 import styles from './Chat.module.css';
 
 interface Props {
@@ -48,6 +50,16 @@ export const ProcessFoldBlock = memo(function ProcessFoldBlock({
   onForkCreated,
 }: Props) {
   const [open, setOpen] = useState(false);
+  // 查找命中：group 里任一消息在 matches 内 → 自动展开折叠组
+  const findMatchedInside = useStore((s) => {
+    const find = sessionScopedValue(s, s.chatFindBySession, sessionPath);
+    if (!find?.open) return false;
+    const ids = new Set(find.matches.map((m) => String(m.index)));
+    return group.items.some((entry) => ids.has(entry.item.data.id));
+  });
+  useEffect(() => {
+    if (findMatchedInside) setOpen(true);
+  }, [findMatchedInside]);
   const panelId = useId();
   const t = window.t ?? ((p: string) => p);
 

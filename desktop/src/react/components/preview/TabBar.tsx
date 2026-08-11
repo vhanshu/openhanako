@@ -63,6 +63,7 @@ export function TabBar() {
             className={`${styles.tab}${id === activeTabId ? ` ${styles.tabActive}` : ''}`}
             onClick={() => handleSetActive(id)}
             onDoubleClick={e => handleCloseTab(e, id)}
+            title={getTitle(id)}
           >
             <span className={styles.tabTitle}>{getTitle(id)}</span>
             <span
