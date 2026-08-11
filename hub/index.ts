@@ -321,7 +321,7 @@ export class Hub {
 
   /**
    * 初始化所有调度器（Scheduler + ChannelRouter）
-   * 在 engine.init() 完成后由 server/index.js 调用
+   * 在 engine.init() 完成后由 server/index.ts 调用
    */
   initSchedulers() {
     const engine = this._engine;
@@ -428,7 +428,7 @@ export class Hub {
         ...(agentId ? { agentId } : {}),
         ...createOptions,
       });
-      engine.persistSessionMeta?.();
+      engine.persistSessionMeta?.(result.sessionPath);
       const sessionPath = result.sessionPath;
       const sessionId = sessionPath ? engine.getSessionIdForPath?.(sessionPath) || null : null;
       if (payload.permissionMode !== undefined && sessionPath) {
@@ -727,13 +727,16 @@ export class Hub {
 
     // ── provider & agent handlers ──
 
-    this._sessionHandlerCleanups.push(bus.handle("provider:credentials", async ({ providerId }) => {
+    this._sessionHandlerCleanups.push(bus.handle("provider:credentials", async ({ providerId, forceRefresh, staleApiKey }) => {
       if (typeof engine.resolveProviderCredentialsFresh !== "function") {
         return { error: "fresh_credentials_unavailable" };
       }
       let fresh;
       try {
-        fresh = await engine.resolveProviderCredentialsFresh(providerId);
+        fresh = await engine.resolveProviderCredentialsFresh(providerId, {
+          forceRefresh: !!forceRefresh,
+          ...(staleApiKey ? { staleApiKey } : {}),
+        });
       } catch {
         return { error: "credential_refresh_failed" };
       }
@@ -917,16 +920,6 @@ export class Hub {
       return { config: fresh?.config || agent.config };
     }));
 
-    this._sessionHandlerCleanups.push(bus.handle("session:capability-drift:mark-stale", async (payload: any = {}) => {
-      if (typeof engine.markCapabilitySnapshotsStale !== "function") {
-        return { error: "capability_drift_unavailable" };
-      }
-      try {
-        return engine.markCapabilitySnapshotsStale(payload);
-      } catch (err) {
-        return { error: err.message || String(err) };
-      }
-    }));
   }
 
   _setupDmHandler() {

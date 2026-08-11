@@ -44,6 +44,7 @@ import { createCommandsRoute } from "../routes/commands.ts";
 import { createServerIdentityRoute } from "../routes/server-identity.ts";
 import { createResourcesRoute } from "../routes/resources.ts";
 import { createResourceIoRoute } from "../routes/resource-io.ts";
+import { createFileHistoryRoute } from "../routes/file-history.ts";
 import { createUsageRoute } from "../routes/usage.ts";
 import { createWebAuthRoute } from "../routes/web-auth.ts";
 import { createWebSocketAuthRoute } from "../routes/ws-auth.ts";
@@ -52,6 +53,7 @@ import { createMobileStaticRoute, resolveMobileStaticRouteOptions } from "../rou
 import { createHtmlPreviewRoute } from "../routes/html-preview.ts";
 import { createAccessRoute } from "../routes/access.ts";
 import { createSpeechRecognitionRoute } from "../routes/speech-recognition.ts";
+import { createMemoryDreamRoute } from "../routes/memory-dream.ts";
 
 /**
  * `/mobile`、`/desktop` 网页客户端入口的供货模式，启动时决议一次 —— 见
@@ -98,6 +100,7 @@ export function registerOpenRoutes(app: Hono, ctx: CompositionContext): void {
   app.route("/api", createSessionProjectsRoute(engine));
   app.route("/api", createModelsRoute(engine));
   app.route("/api", createConfigRoute(engine));
+  app.route("/api", createMemoryDreamRoute(engine));
   app.route("/api", createUploadRoute(engine));
   app.route("/api", createProvidersRoute(engine));
   app.route("/api", createAgentsRoute(engine));
@@ -125,6 +128,7 @@ export function registerOpenRoutes(app: Hono, ctx: CompositionContext): void {
   app.route("/api", createCheckpointsRoute(engine));
   app.route("/api", createCommandsRoute(engine));
   app.route("/api", createResourceIoRoute(engine));
+  app.route("/api", createFileHistoryRoute(engine));
   app.route("/api", createResourcesRoute(engine));
   app.route("/api", createUsageRoute(engine));
   app.route("/api", createSpeechRecognitionRoute(engine));

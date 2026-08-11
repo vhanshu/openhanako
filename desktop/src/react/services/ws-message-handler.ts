@@ -298,10 +298,32 @@ function setCompactionBusy(msg: any, busy: boolean): void {
   const { key, sessionId, sessionPath } = compactionIdentity(msg);
   if (!key) return;
   useStore.setState((state: any) => {
-    const withoutIdentity = (state.compactingSessions || []).filter((item: string) => (
+    const compactingSessions = state.compactingSessions || [];
+    const wasBusy = compactingSessions.some((item: string) => (
+      item === key || item === sessionId || item === sessionPath
+    ));
+    const withoutIdentity = compactingSessions.filter((item: string) => (
       item !== key && item !== sessionId && item !== sessionPath
     ));
-    return { compactingSessions: busy ? [...withoutIdentity, key] : withoutIdentity };
+    const compactionModeBySession = { ...(state.compactionModeBySession || {}) };
+    const priorMode = wasBusy
+      ? compactionModeBySession[key]
+        || (sessionId ? compactionModeBySession[sessionId] : null)
+        || (sessionPath ? compactionModeBySession[sessionPath] : null)
+      : null;
+    const incomingMode = typeof msg.mode === 'string' && msg.mode.trim()
+      ? msg.mode.trim()
+      : null;
+    delete compactionModeBySession[key];
+    if (sessionId) delete compactionModeBySession[sessionId];
+    if (sessionPath) delete compactionModeBySession[sessionPath];
+    if (busy && (incomingMode || priorMode)) {
+      compactionModeBySession[key] = incomingMode || priorMode;
+    }
+    return {
+      compactingSessions: busy ? [...withoutIdentity, key] : withoutIdentity,
+      compactionModeBySession,
+    };
   });
 }
 
@@ -901,9 +923,6 @@ export function handleServerMessage(msg: any): void {
       if (sp === useStore.getState().currentSessionPath && typeof metadata.thinkingLevel === 'string') {
         useStore.getState().setThinkingLevel(metadata.thinkingLevel);
       }
-      if (Object.prototype.hasOwnProperty.call(metadata, 'capabilityDrift')) {
-        useStore.getState().setSessionCapabilityDrift(sp, metadata.capabilityDrift || null);
-      }
       break;
     }
 
@@ -1012,7 +1031,13 @@ export function handleServerMessage(msg: any): void {
         typeof msg.code === 'string' ? msg.code : null,
       ));
       if (!sp) {
-        if (msg.code === 'session_identity_unresolved' || msg.code === 'session_identity_mismatch') {
+        // 身份类错误本身就说明没有会话可以挂靠，落不到 inline 位，只能弹 toast。
+        // internal_contract 同理：服务端认定调用方没带身份，用户看不到就等于故障消失了。
+        if (
+          msg.code === 'session_identity_unresolved'
+          || msg.code === 'session_identity_mismatch'
+          || msg.code === 'internal_contract'
+        ) {
           useStore.getState().addToast(presented.text, 'error', 6000, { errorCode: msg.code });
         } else {
           console.warn('[ws] event missing sessionPath:', msg.type);

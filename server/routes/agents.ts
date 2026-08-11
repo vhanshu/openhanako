@@ -27,6 +27,7 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { emitAppEvent } from "../app-events.ts";
 import { safeJson } from "../hono-helpers.ts";
+import { bodyFromRouteError, statusFromRouteError } from "./route-errors.ts";
 import { saveConfig, clearConfigCache } from "../../lib/memory/config-loader.ts";
 import {
   listExperienceDocuments,
@@ -190,6 +191,7 @@ function emitAgentConfigAppEvents(engine, agentId, { globalFields, agentPartial,
       agentId,
       homeFolder: agentPartial.desk.home_folder || null,
     });
+    engine.refreshFileHistoryWorkspaces?.();
   }
 
   if (hasOwn(agentPartial?.memory, "enabled")) {
@@ -323,7 +325,10 @@ export function createAgentsRoute(engine) {
         memoryMasterEnabled,
       });
     } catch (err) {
-      return c.json({ error: err.message }, 500);
+      // 响应按语义分层后，服务端仍要留全量记录：故障可见不能只靠客户端那一句提示。
+      // stack 首行已经含 message，取不到 stack（抛的不是 Error）才退到 message。
+      log.error(`switch error: ${err?.stack || err?.message || String(err)}`);
+      return c.json(bodyFromRouteError(err), statusFromRouteError(err));
     }
   });
 
@@ -587,6 +592,10 @@ export function createAgentsRoute(engine) {
       }
       if (partial.experience?.enabled !== undefined && typeof partial.experience.enabled !== "boolean") {
         return c.json({ error: "experience.enabled must be a boolean" }, 400);
+      }
+      if (partial.memory?.dream?.auto_enabled !== undefined
+        && typeof partial.memory.dream.auto_enabled !== "boolean") {
+        return c.json({ error: "memory.dream.auto_enabled must be a boolean" }, 400);
       }
       const workspaceSkillPolicyError = validateWorkspaceSkillPolicyPatch(partial.workspace_context);
       if (workspaceSkillPolicyError) {

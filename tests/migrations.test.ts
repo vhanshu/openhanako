@@ -1,5 +1,5 @@
 /**
- * core/migrations.js 单元测试
+ * core/migrations.ts 单元测试
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "fs";
@@ -14,7 +14,7 @@ import { validateProviderModels } from "../shared/provider-model-validation.ts";
 
 // ── 测试工具 ────────────────────────────────────────────────────────────────
 
-const LATEST_DATA_VERSION = 52;
+const LATEST_DATA_VERSION = 53;
 
 function makeTmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "hana-migrations-"));
@@ -188,7 +188,7 @@ describe("runMigrations runner", () => {
 
     expect(getMigrationStatus(prefs)).toEqual({
       registryLatestId: LATEST_DATA_VERSION,
-      pendingIds: [48, 49, 50, 51, 52],
+      pendingIds: [48, 49, 50, 51, 52, 53],
       lastFailedIds: [],
     });
     expect(fs.readFileSync(path.join(userDir, "preferences.json")).equals(before)).toBe(true);
@@ -286,7 +286,7 @@ describe("runMigrations runner", () => {
     }
 
     expect(logs).toContain("[migrations] 收据保存失败，应用将继续启动；未落盘的迁移会在下次启动重试");
-    expect(getMigrationStatus(prefs).pendingIds).toEqual([49, 50, 51, 52]);
+    expect(getMigrationStatus(prefs).pendingIds).toEqual([49, 50, 51, 52, 53]);
   });
 });
 
@@ -608,7 +608,12 @@ describe("migration #43: Codex image generation defaults follow mode schema", ()
     });
     expect(nextPrefs.imageGeneration.providerDefaults.openai).toEqual({ size: "1024x1024" });
 
-    const pluginConfig = readJson(path.join(tmpDir, "plugin-data", "image-gen", "config.json"));
+    const pluginConfigPath = path.join(tmpDir, "plugin-data", "image-gen", "config.json");
+    if (process.platform !== "win32") {
+      // A migration must leave the file under the same contract the store writes it with.
+      expect(fs.statSync(pluginConfigPath).mode & 0o777).toBe(0o600);
+    }
+    const pluginConfig = readJson(pluginConfigPath);
     expect(pluginConfig.global.providerDefaults["openai-codex-oauth"]).toEqual({
       models: {
         "gpt-image-2": {
@@ -1883,7 +1888,11 @@ describe("migration #50: Gemini image preview IDs converge to stable IDs", () =>
       "gemini-3.1-flash-image-preview",
     );
 
-    const pluginConfig = readJson(path.join(tmpDir, "plugin-data", "image-gen", "config.json"));
+    const pluginConfigPath = path.join(tmpDir, "plugin-data", "image-gen", "config.json");
+    if (process.platform !== "win32") {
+      expect(fs.statSync(pluginConfigPath).mode & 0o777).toBe(0o600);
+    }
+    const pluginConfig = readJson(pluginConfigPath);
     expect(pluginConfig.global.defaultImageModel.id).toBe("gemini-3-pro-image");
     expect(pluginConfig.global.providerDefaults.gemini.models).toEqual({
       "gemini-3-pro-image": { resolution: "4K" },
@@ -5536,5 +5545,84 @@ describe("migration #41 — restore dynamic user name placeholders in identity s
     expect(fs.readFileSync(brokenPath, "utf-8")).toContain("{{userName}}'s personal assistant");
     expect(fs.readFileSync(concretePath, "utf-8")).toContain("黎的个人助手。感性与理性兼备。");
     expect(fs.existsSync(`${concretePath}.pre-v41.bak`)).toBe(false);
+  });
+});
+
+describe("migration #53 — drop session titles made of injected prompt envelopes", () => {
+  let tmpDir, agentsDir, userDir;
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+    agentsDir = path.join(tmpDir, "agents");
+    userDir = path.join(tmpDir, "user");
+    fs.mkdirSync(agentsDir, { recursive: true });
+  });
+
+  afterEach(() => { fs.rmSync(tmpDir, { recursive: true, force: true }); });
+
+  function runFrom52() {
+    const prefs = makePrefs(userDir);
+    prefs.savePreferences({ _dataVersion: 52 });
+    runMigrations({
+      hanakoHome: tmpDir,
+      agentsDir,
+      prefs,
+      providerRegistry: makeRegistry([]),
+      log: () => {},
+    });
+    return prefs;
+  }
+
+  it("removes envelope titles across agents and keeps real ones", () => {
+    const hanaTitles = path.join(agentsDir, "hana", "sessions", "session-titles.json");
+    const workTitles = path.join(agentsDir, "work", "sessions", "session-titles.json");
+    writeJson(hanaTitles, {
+      "a.jsonl": "[hana_reference] yuque（4…",
+      "b.jsonl": "[hana_reminder at 2026-07…",
+      "c.jsonl": "周报整理",
+    });
+    writeJson(workTitles, {
+      "d.jsonl": "[attached_image: /tmp/a.png]",
+      "e.jsonl": '[SessionFile] {"fileId":"sf-1"}',
+      "f.jsonl": "重构缓存层",
+    });
+
+    const prefs = runFrom52();
+
+    expect(readJson(hanaTitles)).toEqual({ "c.jsonl": "周报整理" });
+    expect(readJson(workTitles)).toEqual({ "f.jsonl": "重构缓存层" });
+    expect(prefs.getPreferences()._dataVersion).toBe(LATEST_DATA_VERSION);
+  });
+
+  it("is idempotent and leaves clean files byte-identical", () => {
+    const titlePath = path.join(agentsDir, "hana", "sessions", "session-titles.json");
+    writeJson(titlePath, { "a.jsonl": "[hana_reference] yuque（4…", "b.jsonl": "周报整理" });
+
+    runFrom52();
+    const afterFirst = fs.readFileSync(titlePath, "utf-8");
+
+    const prefs = makePrefs(userDir);
+    const replayed = prefs.getPreferences();
+    replayed._dataVersion = 52;
+    prefs.savePreferences(replayed);
+    runMigrations({
+      hanakoHome: tmpDir,
+      agentsDir,
+      prefs,
+      providerRegistry: makeRegistry([]),
+      log: () => {},
+    });
+
+    expect(fs.readFileSync(titlePath, "utf-8")).toBe(afterFirst);
+    expect(readJson(titlePath)).toEqual({ "b.jsonl": "周报整理" });
+  });
+
+  it("skips agents without a titles file", () => {
+    fs.mkdirSync(path.join(agentsDir, "empty", "sessions"), { recursive: true });
+
+    const prefs = runFrom52();
+
+    expect(fs.existsSync(path.join(agentsDir, "empty", "sessions", "session-titles.json"))).toBe(false);
+    expect(prefs.getPreferences()._dataVersion).toBe(LATEST_DATA_VERSION);
   });
 });

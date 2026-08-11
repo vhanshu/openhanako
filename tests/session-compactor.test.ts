@@ -38,7 +38,9 @@ import {
   estimateCachePreservingCompactionRequest,
   normalizeCompactionProviderPayload,
   isDirectCompactionInProgress,
+  projectMessagesToLatestCompactionUsageEpoch,
   runCachePreservingCompactionForSession,
+  runLossyLocalCompactionForSession,
   shouldHardTruncateCachePreservingCompaction,
 } from "../core/session-compactor.ts";
 import * as sessionCompactorModule from "../core/session-compactor.ts";
@@ -148,6 +150,88 @@ describe("session-compactor", () => {
       return Math.ceil(content.length / 4);
     });
     findCutPointMock.mockReturnValue({ firstKeptEntryIndex: 1, turnStartIndex: -1, isSplitTurn: false });
+  });
+
+  it("starts a fresh usage epoch at a live compaction summary", () => {
+    const staleUsage = {
+      input: 120_000,
+      output: 1_000,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 121_000,
+      cost: { total: 1 },
+    };
+    const retainedAssistant = {
+      ...piAssistant("retained suffix", 100),
+      usage: staleUsage,
+    };
+    const messages = [
+      { role: "compactionSummary", summary: "checkpoint", tokensBefore: 121_000, timestamp: 200 },
+      retainedAssistant,
+      piUser("continue", 201),
+    ];
+
+    const projected = projectMessagesToLatestCompactionUsageEpoch(messages);
+
+    expect(projected).not.toBe(messages);
+    expect(projected[1]).not.toBe(retainedAssistant);
+    expect(projected[1].usage).toMatchObject({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+    });
+    expect(retainedAssistant.usage).toBe(staleUsage);
+    expect(retainedAssistant.usage.totalTokens).toBe(121_000);
+  });
+
+  it("uses the latest summary for repeated compactions and preserves only proven newer usage", () => {
+    const oldEpochUsage = { input: 80_000, output: 100, cacheRead: 0, cacheWrite: 0, totalTokens: 80_100 };
+    const retainedUsage = { input: 60_000, output: 100, cacheRead: 0, cacheWrite: 0, totalTokens: 60_100 };
+    const currentEpochUsage = { input: 4_000, output: 500, cacheRead: 0, cacheWrite: 0, totalTokens: 4_500 };
+    const messages = [
+      { role: "compactionSummary", summary: "first", tokensBefore: 80_100, timestamp: 100 },
+      { ...piAssistant("first epoch", 250), usage: oldEpochUsage },
+      { role: "compactionSummary", summary: "second", tokensBefore: 60_100, timestamp: 300 },
+      { ...piAssistant("retained after second summary", 250), usage: retainedUsage },
+      { ...piAssistant("new answer", 350), usage: currentEpochUsage },
+      piUser("next", 360),
+    ];
+
+    const projected = projectMessagesToLatestCompactionUsageEpoch(messages);
+
+    expect(projected[1].usage.totalTokens).toBe(0);
+    expect(projected[3].usage.totalTokens).toBe(0);
+    expect(projected[4]).toBe(messages[4]);
+    expect(projected[4].usage).toBe(currentEpochUsage);
+  });
+
+  it("treats missing timestamps as stale but leaves non-compacted budgeting untouched", () => {
+    const usage = {
+      input: 10_000,
+      output: 100,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 10_100,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+    const ordinaryMessages = [{ ...piAssistant("ordinary", 100), usage }];
+    expect(projectMessagesToLatestCompactionUsageEpoch(ordinaryMessages)).toBe(ordinaryMessages);
+
+    const legacyRetained: ReturnType<typeof piAssistant> & { timestamp: number | undefined } = {
+      ...piAssistant("legacy retained", 0),
+      timestamp: undefined,
+      usage,
+    };
+    const legacyMessages = [
+      { role: "compactionSummary", summary: "checkpoint", tokensBefore: 10_100, timestamp: 200 },
+      legacyRetained,
+    ];
+    const projected = projectMessagesToLatestCompactionUsageEpoch(legacyMessages);
+
+    expect(projected[1].usage.totalTokens).toBe(0);
+    expect(legacyRetained.usage).toBe(usage);
   });
 
   it("sends the full live prefix once, keeps the previous summary in place, and scopes the retained tail in one hidden instruction", async () => {
@@ -293,6 +377,52 @@ describe("session-compactor", () => {
       tokensBefore: 4321,
       details: { readFiles: [], modifiedFiles: [] },
     });
+  });
+
+  it("records an explicit checkpoint notice when malformed old history was safely removed", async () => {
+    const historyRecovery = {
+      kind: "reasoning-replay-prefix-trim",
+      removedMessageCount: 4,
+    };
+    const result = await createCachePreservingCompactionResult({
+      preparation: {
+        firstKeptEntryId: "retained-entry",
+        tokensBefore: 4321,
+        messagesToSummarize: [piUser("valid old suffix", 1)],
+        turnPrefixMessages: [],
+        settings: { reserveTokens: 1000 },
+        fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+      },
+      model: {
+        id: "deepseek-reasoner",
+        provider: "deepseek",
+        api: "openai-completions",
+        reasoning: true,
+        contextWindow: 128_000,
+        maxTokens: 8_192,
+      },
+      systemPrompt: "system",
+      messages: [piUser("valid old suffix", 1)],
+      retainedMessageCount: 0,
+      messagesAreNormalized: true,
+      cacheMetadataOverride: {
+        cacheStrategy: "cache_recovery",
+        cacheGroup: "compaction.history",
+        strict: false,
+        degradeReason: "malformed_reasoning_history_trim",
+      },
+      customInstructions: undefined,
+      signal: undefined,
+      thinkingLevel: "off",
+      streamFn: vi.fn(async () => agentStreamOf()),
+      usageLedger: undefined,
+      usageContext: undefined,
+      historyRecovery,
+    });
+
+    expect(result.summary).toContain("<history-recovery>");
+    expect(result.summary).toContain("Removed provider-visible messages: 4.");
+    expect(result.details).toMatchObject({ historyRecovery });
   });
 
   it("proves a first-compaction boundary from a real Pi SessionManager context", async () => {
@@ -710,6 +840,165 @@ describe("session-compactor", () => {
       [...result.messages, result.instruction]
         .every((message) => Object.getOwnPropertySymbols(message).length === 0),
     ).toBe(true);
+  });
+
+  it("trims only a malformed old tool turn at a complete transaction boundary", async () => {
+    const malformedToolCall = {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call-old", name: "read", arguments: {} }],
+      timestamp: 2,
+    };
+    const malformedToolResult = {
+      role: "toolResult",
+      toolCallId: "call-old",
+      toolName: "read",
+      content: [{ type: "text", text: "old result" }],
+      timestamp: 3,
+    };
+    const validOldUser = piUser("newer old request", 5);
+    const validOldAssistant = piAssistant("newer old answer", 6);
+    const retained = piUser("retained tail", 7);
+    const liveMessages = [
+      piUser("malformed old request", 1),
+      malformedToolCall,
+      malformedToolResult,
+      piAssistant("old tool answer", 4),
+      validOldUser,
+      validOldAssistant,
+      retained,
+    ];
+    const normalizeMessages = vi.fn((messages) => {
+      const missingReasoning = messages.some((message) => (
+        message.role === "assistant"
+        && Array.isArray(message.content)
+        && message.content.some((block) => block?.type === "toolCall")
+        && typeof message.reasoning_content !== "string"
+      ));
+      if (missingReasoning) {
+        throw new Error(
+          "DeepSeek Anthropic thinking mode history is missing non-empty thinking content for a tool call.",
+        );
+      }
+      return messages;
+    });
+
+    const result = await sessionCompactorModule.buildCachePreservingCompactionPrefix({
+      liveMessages,
+      preparation: {
+        messagesToSummarize: liveMessages.slice(0, -1),
+        turnPrefixMessages: [],
+        isSplitTurn: false,
+      },
+      model: {
+        id: "deepseek-reasoner",
+        provider: "deepseek",
+        api: "openai-completions",
+        reasoning: true,
+      },
+      transformContext: async (messages) => messages,
+      convertToLlm: (messages) => messages,
+      normalizeMessages,
+    });
+
+    expect(result.messages).toEqual([validOldUser, validOldAssistant, retained]);
+    expect(result).toMatchObject({
+      oldMessageCount: 2,
+      retainedMessageCount: 1,
+      historyRecovery: {
+        kind: "reasoning-replay-prefix-trim",
+        removedMessageCount: 4,
+      },
+    });
+    expect(result.instruction.content[0].text).toContain("live message indexes [0, 2)");
+  });
+
+  it("returns a typed 422 when malformed old reasoning has no complete tool boundary", async () => {
+    const oldUser = piUser("old request", 1);
+    const incompleteToolCall = {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call-incomplete", name: "read", arguments: {} }],
+      timestamp: 2,
+    };
+    const retained = piUser("retained tail", 3);
+    const normalizeMessages = (messages) => {
+      if (messages.some((message) => (
+        message.role === "assistant"
+        && Array.isArray(message.content)
+        && message.content.some((block) => block?.id === "call-incomplete")
+      ))) {
+        throw new Error(
+          "DeepSeek thinking mode reasoning_content is missing for tool_calls history (assistant tool call).",
+        );
+      }
+      return messages;
+    };
+
+    await expect(sessionCompactorModule.buildCachePreservingCompactionPrefix({
+      liveMessages: [oldUser, incompleteToolCall, retained],
+      preparation: {
+        messagesToSummarize: [oldUser, incompleteToolCall],
+        turnPrefixMessages: [],
+        isSplitTurn: false,
+      },
+      model: {
+        id: "deepseek-reasoner",
+        provider: "deepseek",
+        api: "openai-completions",
+        reasoning: true,
+      },
+      transformContext: async (messages) => messages,
+      convertToLlm: (messages) => messages,
+      normalizeMessages,
+    })).rejects.toMatchObject({
+      name: "CompactionHistoryReplayError",
+      code: "COMPACTION_HISTORY_REPLAY_UNPROCESSABLE",
+      statusCode: 422,
+      details: { boundaryRegion: "old" },
+    });
+  });
+
+  it("never trims valid old history when the retained suffix itself cannot replay", async () => {
+    const oldUser = piUser("valid old request", 1);
+    const retainedToolCall = {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call-retained", name: "read", arguments: {} }],
+      timestamp: 2,
+    };
+    const normalizeMessages = (messages) => {
+      if (messages.some((message) => (
+        message.role === "assistant"
+        && Array.isArray(message.content)
+        && message.content.some((block) => block?.id === "call-retained")
+      ))) {
+        throw new Error(
+          "DeepSeek thinking mode reasoning_content is missing for tool_calls history (assistant tool call).",
+        );
+      }
+      return messages;
+    };
+
+    await expect(sessionCompactorModule.buildCachePreservingCompactionPrefix({
+      liveMessages: [oldUser, retainedToolCall],
+      preparation: {
+        messagesToSummarize: [oldUser],
+        turnPrefixMessages: [],
+        isSplitTurn: false,
+      },
+      model: {
+        id: "deepseek-reasoner",
+        provider: "deepseek",
+        api: "openai-completions",
+        reasoning: true,
+      },
+      transformContext: async (messages) => messages,
+      convertToLlm: (messages) => messages,
+      normalizeMessages,
+    })).rejects.toMatchObject({
+      name: "CompactionHistoryReplayError",
+      code: "COMPACTION_HISTORY_REPLAY_UNPROCESSABLE",
+      statusCode: 422,
+      details: { boundaryRegion: "retained" },
+    });
   });
 
   it("survives the installed Pi ExtensionRunner structured-clone boundary without leaking proof carriers", async () => {
@@ -1566,7 +1855,7 @@ describe("session-compactor", () => {
       attribution: { kind: "session", sessionPath: "/sessions/current.jsonl" },
       model: { provider: "openai", modelId: "gpt-5", api: "openai-responses" },
       usage: {
-        input: { totalTokens: 100, uncachedTokens: 20 },
+        input: { totalTokens: 100, uncachedTokens: 100 },
         output: { totalTokens: 25 },
         cache: { readTokens: 80, hit: true },
       },
@@ -2221,5 +2510,62 @@ describe("direct compaction mutual exclusion", () => {
     // one gets to fail on its own merits, not on a stale lock.
     await expect(runCachePreservingCompactionForSession(session, { model, settings }))
       .rejects.not.toThrow(/compaction already in progress/);
+  });
+});
+
+describe("runLossyLocalCompactionForSession", () => {
+  it("persists a local checkpoint, replaces live messages, and emits a mode-aware lifecycle", async () => {
+    const branchEntries = [
+      { id: "u1", parentId: null, type: "message", message: piUser("old", 1), timestamp: 1 },
+      { id: "a1", parentId: "u1", type: "message", message: piAssistant("answer", 2), timestamp: 2 },
+      { id: "u2", parentId: "a1", type: "message", message: piUser("retained", 3), timestamp: 3 },
+    ];
+    prepareCompactionMock.mockReturnValueOnce({
+      firstKeptEntryId: "u2",
+      tokensBefore: 500,
+      fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+    });
+    const rebuiltMessages = [{ role: "compactionSummary", summary: "rebuilt" }];
+    const appendCompaction = vi.fn(() => "compaction-1");
+    const replaceMessages = vi.fn();
+    const emit = vi.fn();
+    const getSummarySource = vi.fn(async () => null);
+    const session: any = {
+      isCompacting: false,
+      agent: { replaceMessages },
+      settingsManager: { getCompactionSettings: () => REAL_COMPACTION_SETTINGS },
+      sessionManager: {
+        getBranch: () => branchEntries,
+        appendCompaction,
+        buildSessionContext: () => ({ messages: rebuiltMessages }),
+      },
+      _emit: emit,
+    };
+
+    const result = await runLossyLocalCompactionForSession(session, {
+      getSummarySource,
+      emitLifecycle: true,
+      lifecycleReason: "threshold",
+    });
+
+    expect(result).toMatchObject({
+      firstKeptEntryId: "u2",
+      tokensBefore: 500,
+      details: { strategy: "lossy_local", zeroModelRequest: true },
+    });
+    expect(getSummarySource).toHaveBeenCalledWith(session);
+    expect(appendCompaction).toHaveBeenCalledWith(
+      expect.stringContaining("### User\nold"),
+      "u2",
+      500,
+      expect.objectContaining({ strategy: "lossy_local" }),
+      true,
+    );
+    expect(replaceMessages).toHaveBeenCalledWith(rebuiltMessages);
+    expect(emit.mock.calls.map(([event]) => event)).toEqual([
+      expect.objectContaining({ type: "compaction_start", mode: "lossy_local" }),
+      expect.objectContaining({ type: "compaction_end", mode: "lossy_local", aborted: false }),
+    ]);
+    expect(isDirectCompactionInProgress(session)).toBe(false);
   });
 });

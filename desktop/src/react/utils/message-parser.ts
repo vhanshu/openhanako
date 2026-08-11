@@ -7,6 +7,7 @@
 
 import { QUOTE_ORIGINAL_END, QUOTE_ORIGINAL_START } from './quoted-selection';
 import { moodLabelForYuan } from '../../../../shared/yuan-visuals.ts';
+import { parseLeadingInternalMoodBlock } from '../../../../shared/internal-mood-block.ts';
 
 // ── Mood 解析 ──
 
@@ -41,12 +42,11 @@ export function cleanMoodText(raw: string): string {
 
 export function parseMoodFromContent(content: string): { mood: string | null; yuan: string | null; text: string } {
   if (!content) return { mood: null, yuan: null, text: '' };
-  const moodRe = /<(mood|pulse|reflect)>([\s\S]*?)<\/(?:mood|pulse|reflect)>/;
-  const match = content.match(moodRe);
-  if (!match) return { mood: null, yuan: null, text: content };
-  const yuan = TAG_TO_YUAN[match[1]] || 'hanako';
-  const mood = cleanMoodText(match[2].trim());
-  const text = content.replace(moodRe, '').replace(/^\n+/, '').trim();
+  const block = parseLeadingInternalMoodBlock(content);
+  if (!block) return { mood: null, yuan: null, text: content };
+  const yuan = TAG_TO_YUAN[block.tag] || 'hanako';
+  const mood = cleanMoodText(block.content.trim());
+  const text = block.rest.replace(/^\n+/, '').trim();
   return { mood, yuan, text };
 }
 
@@ -306,6 +306,12 @@ export function extractToolDetail(name: string, args: Record<string, unknown> | 
     }
     case 'update_settings':
       return { text: (args.key || args.setting || '') as string };
+    case 'session': {
+      // 目标会话名由渲染侧按 sessionId 查出来覆盖，这里只给查不到时的兜底
+      if (args.action === 'create') return { text: (args.agent || '') as string };
+      const sessionId = (args.sessionId || '') as string;
+      return { text: sessionId ? `…${sessionId.slice(-4)}` : '' };
+    }
     default: {
       // 插件工具：取第一个有意义的字符串参数作详情
       const first = Object.values(args).find(v => typeof v === 'string' && v.length > 0);

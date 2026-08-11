@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { clampMaxTokensToContext } from "@earendil-works/pi-ai/api/simple-options";
+import type { AssistantMessage, Model } from "@earendil-works/pi-ai";
 
 // Mock compaction-utils 以便精准控制 L3 判断和硬截断结果
 vi.mock("../core/compaction-utils.js", () => ({
@@ -15,7 +17,11 @@ import {
   computeHardTruncation,
   truncateTextHeadTail,
 } from "../core/compaction-utils.ts";
-import { Type } from "../lib/pi-sdk/index.ts";
+import {
+  convertAgentMessagesToLlm,
+  Type,
+  type AgentMessage,
+} from "../lib/pi-sdk/index.ts";
 
 const VALID_COMPACTION_SUMMARY = `## Goal
 Keep the session useful.
@@ -66,7 +72,10 @@ function assistantStream(message: any) {
   } as any;
 }
 
-function assistantMessage(content: any[], stopReason = "stop") {
+function assistantMessage(
+  content: AssistantMessage["content"],
+  stopReason: AssistantMessage["stopReason"] = "stop",
+): AssistantMessage {
   return {
     role: "assistant",
     content,
@@ -162,11 +171,70 @@ describe("CompactionGuardExtension", () => {
     })(pi);
   });
 
-  it("registers only tool_result and session_before_compact handlers", () => {
+  it("registers context usage epochs, tool_result, and session_before_compact handlers", () => {
+    expect(pi.on).toHaveBeenCalledWith("context", expect.any(Function));
     expect(pi.on).toHaveBeenCalledWith("tool_result", expect.any(Function));
     expect(pi.on).toHaveBeenCalledWith("session_before_compact", expect.any(Function));
-    expect(pi.on).not.toHaveBeenCalledWith("context", expect.any(Function));
     expect(pi.on).not.toHaveBeenCalledWith("message_end", expect.any(Function));
+  });
+
+  describe("live compaction usage epoch", () => {
+    it("prevents retained pre-summary usage from collapsing the first answer budget", async () => {
+      const model: Model<"openai-completions"> = {
+        id: "usage-epoch-model",
+        name: "Usage epoch model",
+        api: "openai-completions",
+        provider: "test-provider",
+        baseUrl: "https://example.invalid/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 32_000,
+      };
+      const retainedAssistant = {
+        ...assistantMessage([{ type: "text", text: "retained suffix" }]),
+        timestamp: 100,
+        usage: {
+          ...usage,
+          input: 127_000,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 127_000,
+        },
+      };
+      const messages: AgentMessage[] = [
+        { role: "compactionSummary", summary: "checkpoint", tokensBefore: 127_000, timestamp: 200 },
+        retainedAssistant,
+        { role: "user", content: [{ type: "text", text: "continue" }], timestamp: 201 },
+      ];
+      const providerContextBefore = {
+        systemPrompt: "",
+        tools: [],
+        messages: await convertAgentMessagesToLlm(messages),
+      };
+      expect(clampMaxTokensToContext(model, providerContextBefore, 32_000)).toBe(1);
+
+      const result = await pi.trigger("context", { messages });
+      const providerContextAfter = {
+        systemPrompt: "",
+        tools: [],
+        messages: await convertAgentMessagesToLlm(result.messages),
+      };
+
+      expect(result.messages[1].usage.totalTokens).toBe(0);
+      expect(retainedAssistant.usage.totalTokens).toBe(127_000);
+      expect(clampMaxTokensToContext(model, providerContextAfter, 32_000)).toBe(32_000);
+    });
+
+    it("does not project ordinary non-compacted conversations", async () => {
+      const messages = [assistantMessage([{ type: "text", text: "ordinary answer" }])];
+
+      const result = await pi.trigger("context", { messages });
+
+      expect(result).toBeUndefined();
+    });
   });
 
   describe("L1: tool_result truncation", () => {
@@ -1060,6 +1128,142 @@ describe("CompactionGuardExtension", () => {
         messages: [oldMessage, retainedTail],
       }));
       expect(computeHardTruncation).not.toHaveBeenCalled();
+    });
+
+    it("compacts after removing only a complete malformed DeepSeek tool turn from old history", async () => {
+      pi = createMockPi();
+      const deepseekModel = {
+        id: "deepseek-reasoner",
+        provider: "deepseek",
+        api: "openai-completions",
+        reasoning: true,
+        contextWindow: 128_000,
+      };
+      const oldToolCall = {
+        ...assistantMessage(
+          [{ type: "toolCall", id: "call-old", name: "read", arguments: {} }],
+          "toolUse",
+        ),
+        api: deepseekModel.api,
+        provider: deepseekModel.provider,
+        model: deepseekModel.id,
+        timestamp: 2,
+      };
+      const oldToolResult = {
+        role: "toolResult",
+        toolCallId: "call-old",
+        toolName: "read",
+        content: [{ type: "text", text: "old result" }],
+        isError: false,
+        timestamp: 3,
+      };
+      const oldFinal = {
+        ...assistantMessage([{ type: "text", text: "old answer" }]),
+        timestamp: 4,
+      };
+      const retainedUser = {
+        role: "user",
+        content: [{ type: "text", text: "retained request" }],
+        timestamp: 5,
+      };
+      const malformedOldMessages = [oldMessage, oldToolCall, oldToolResult, oldFinal];
+      createCompactionGuardExtension({
+        getRequestReasoningLevel: () => "high",
+        cacheCompactor,
+        buildSessionCacheSnapshot,
+        getSessionTransformContext,
+        getSessionAgentRunRuntime,
+        getCompactionMode: () => "auto",
+      })(pi);
+
+      const result = await pi.trigger(
+        "session_before_compact",
+        {
+          preparation: {
+            ...preparation,
+            messagesToSummarize: malformedOldMessages,
+          },
+          signal: { aborted: false },
+        },
+        {
+          ...ctx,
+          model: deepseekModel,
+          getThinkingLevel: () => "high",
+          sessionManager: {
+            ...ctx.sessionManager,
+            buildSessionContext: () => ({
+              thinkingLevel: "high",
+              messages: [...malformedOldMessages, retainedUser],
+            }),
+          },
+        },
+      );
+
+      expect(result).toMatchObject({ compaction: { summary: "cache summary" } });
+      expect(cacheCompactor).toHaveBeenCalledWith(expect.objectContaining({
+        messages: [retainedUser],
+        retainedMessageCount: 1,
+        historyRecovery: {
+          kind: "reasoning-replay-prefix-trim",
+          removedMessageCount: 4,
+        },
+        cacheMetadataOverride: expect.objectContaining({
+          cacheStrategy: "cache_recovery",
+          strict: false,
+          degradeReason: "malformed_reasoning_history_trim",
+        }),
+      }));
+    });
+
+    it("surfaces an unsafe retained reasoning replay error instead of silently using native compaction", async () => {
+      pi = createMockPi();
+      const deepseekModel = {
+        id: "deepseek-reasoner",
+        provider: "deepseek",
+        api: "openai-completions",
+        reasoning: true,
+        contextWindow: 128_000,
+      };
+      const retainedToolCall = {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call-retained", name: "read", arguments: {} }],
+        api: deepseekModel.api,
+        provider: deepseekModel.provider,
+        model: deepseekModel.id,
+        timestamp: 2,
+      };
+      createCompactionGuardExtension({
+        getRequestReasoningLevel: () => "high",
+        cacheCompactor,
+        buildSessionCacheSnapshot,
+        getSessionTransformContext,
+        getSessionAgentRunRuntime,
+        getCompactionMode: () => "auto",
+      })(pi);
+
+      await expect(pi.trigger(
+        "session_before_compact",
+        { preparation, signal: { aborted: false } },
+        {
+          ...ctx,
+          model: deepseekModel,
+          getThinkingLevel: () => "high",
+          sessionManager: {
+            ...ctx.sessionManager,
+            buildSessionContext: () => ({
+              thinkingLevel: "high",
+              messages: [oldMessage, retainedToolCall],
+            }),
+          },
+        },
+      )).rejects.toMatchObject({
+        name: "CompactionHistoryReplayError",
+        code: "COMPACTION_HISTORY_REPLAY_UNPROCESSABLE",
+        statusCode: 422,
+        details: { boundaryRegion: "retained" },
+      });
+      expect(cacheCompactor).not.toHaveBeenCalled();
+      expect(buildSessionCacheSnapshot).not.toHaveBeenCalled();
     });
 
     it("cancels instead of falling back when explicit cache-preserving mode fails", async () => {

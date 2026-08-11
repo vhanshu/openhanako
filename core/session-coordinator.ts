@@ -12,12 +12,10 @@ import { createAgentSession, SessionManager, estimateTokens, refreshSessionModel
 import { isSessionJsonlFilename } from "../lib/session-jsonl.ts";
 import { createDefaultSettings } from "./session-defaults.ts";
 import { isDefaultWorkspacePath, restoreDefaultWorkspaceIfMissing } from "../shared/default-workspace.ts";
-import { computeHardTruncation } from "./compaction-utils.ts";
 import {
   appendCompactionResultToSession,
   createColdUtilitySummaryResult,
   isDirectCompactionInProgress,
-  runCachePreservingCompactionForSession,
 } from "./session-compactor.ts";
 import {
   installDynamicCompactionReserve,
@@ -107,7 +105,6 @@ import {
 } from "../lib/llm/cache-prefix-contract.ts";
 import { buildSessionCacheSnapshot as buildSessionCacheSnapshotValue } from "./session-cache-snapshot.ts";
 import { repairRestoredToolSnapshotDetailed, sameToolNames } from "./tool-snapshot-repair.ts";
-import { buildSessionCapabilityDrift } from "./session-capability-drift.ts";
 import {
   SESSION_PROMPT_SNAPSHOT_VERSION,
   freezeAgentsFilesResult,
@@ -187,6 +184,18 @@ function modelEntryId(entry: any) {
 
 function sessionModelRef(provider: any, modelId: any) {
   return provider && modelId ? `${provider}/${modelId}` : "unknown";
+}
+
+const MODEL_CONTEXT_TOO_LARGE_CODE = "MODEL_CONTEXT_TOO_LARGE";
+
+function createModelContextTooLargeError(currentTokens: number, effectiveWindow: number) {
+  const error: any = new Error(t("error.modelContextTooLarge"));
+  error.name = "ModelContextTooLargeError";
+  error.code = MODEL_CONTEXT_TOO_LARGE_CODE;
+  error.status = 409;
+  error.currentTokens = currentTokens;
+  error.effectiveWindow = effectiveWindow;
+  return error;
 }
 
 function classifySessionModelAvailability(models: any, provider: string, modelId: string): SessionModelAvailability {
@@ -370,18 +379,19 @@ function assertAudioInputSupported(model: any, audios: any) {
   }
 }
 
-function buildPromptMediaOptions(opts: any) {
+function buildPromptMediaOptions(opts: any, preflightResult?: (success: boolean) => void) {
   const media = [
     ...(opts?.images || []),
     ...(opts?.videos || []),
     ...(opts?.audios || []),
   ];
-  if (!media.length) return undefined;
+  if (!media.length && !preflightResult) return undefined;
   return {
-    images: media,
-    ...(opts.imageAttachmentPaths?.length ? { imageAttachmentPaths: opts.imageAttachmentPaths } : {}),
-    ...(opts.videoAttachmentPaths?.length ? { videoAttachmentPaths: opts.videoAttachmentPaths } : {}),
-    ...(opts.audioAttachmentPaths?.length ? { audioAttachmentPaths: opts.audioAttachmentPaths } : {}),
+    ...(media.length ? { images: media } : {}),
+    ...(opts?.imageAttachmentPaths?.length ? { imageAttachmentPaths: opts.imageAttachmentPaths } : {}),
+    ...(opts?.videoAttachmentPaths?.length ? { videoAttachmentPaths: opts.videoAttachmentPaths } : {}),
+    ...(opts?.audioAttachmentPaths?.length ? { audioAttachmentPaths: opts.audioAttachmentPaths } : {}),
+    ...(preflightResult ? { preflightResult } : {}),
   };
 }
 
@@ -2305,8 +2315,6 @@ export class SessionCoordinator {
     let runtimeToolNames = null;
     let unavailableToolNames: string[] = [];
     let shouldPersistRestoredToolNames = false;
-    // #1624：dismissed fingerprint 仍从 session-meta 读出，保留未来手动提示链路。
-    let restoredDriftDismissedFingerprint: string | null = null;
     const restoredCapabilityToolNames = Array.isArray(restoredCapabilitySnapshot?.toolNames)
       ? uniqueToolNames(restoredCapabilitySnapshot.toolNames)
       : null;
@@ -2323,22 +2331,14 @@ export class SessionCoordinator {
             log.warn(`session-meta read for tool-snapshot restore failed, recomputing from current agent config: ${err.message}`);
           }
         }
-        restoredDriftDismissedFingerprint =
-          typeof restoredCapabilitySnapshot?.capabilityDriftDismissedFingerprint === "string"
-            ? restoredCapabilitySnapshot.capabilityDriftDismissedFingerprint
-            : typeof metaEntry?.capabilityDriftDismissedFingerprint === "string"
-            ? metaEntry.capabilityDriftDismissedFingerprint
-            : null;
         if (refreshCapabilitySnapshots) {
-          // #1624 显式刷新：Case C 语义重算（含插件工具），强制持久化，
-          // 并清空 dismissed 状态（旧 fingerprint 对新快照没有意义）。
+          // 显式更新：Case C 语义重算（含插件工具）并强制持久化。
           const disabled = agent.config?.tools?.disabled ?? DEFAULT_DISABLED_TOOL_NAMES;
           snapshotToolNames = computeToolSnapshot(allToolNames, disabled, {
             extraDisabled: extraDisabledToolNames,
           });
           runtimeToolNames = snapshotToolNames;
           shouldPersistRestoredToolNames = true;
-          restoredDriftDismissedFingerprint = null;
         } else if (restoredCapabilityToolNames) {
           const runtimeAvailableToolNames = computeToolSnapshot(allToolNames, [], {
             extraDisabled: extraDisabledToolNames,
@@ -2387,20 +2387,6 @@ export class SessionCoordinator {
       });
       runtimeToolNames = snapshotToolNames;
     }
-
-    // A missing runtime handler is availability state, not permission to
-    // rewrite the frozen contract. Surface the outage while keeping restore
-    // otherwise free of live prompt-diff work.
-    const unavailableDrift = unavailableToolNames.length > 0
-      ? buildSessionCapabilityDrift({
-          frozenToolNames: runtimeToolNames || [],
-          liveToolNames: runtimeToolNames || [],
-          invalidToolNames: unavailableToolNames,
-          frozenSystemPrompt: "",
-          liveSystemPrompt: "",
-        })
-      : null;
-    let capabilityDrift = unavailableDrift?.hasDrift ? unavailableDrift : null;
 
     const reminderBaselineSeq = this._envChangeLedger?.maxSeq?.() ?? 0;
     const hasPreviousReminderState = reminderState && typeof reminderState === "object";
@@ -2472,9 +2458,6 @@ export class SessionCoordinator {
       sessionKind: pluginSessionMeta?.kind || null,
       sessionVisibility: pluginSessionMeta?.visibility || "public",
       memoryReflectionSnapshot,
-      // #1624：session 级提示数据，归属 sessionEntry（this._sessions 由 _sessionRuntimeKeyForPath 以 sessionId 优先键控，sessionPath 仅为兼容退化键），不挂 agent/engine
-      capabilityDrift,
-      capabilityDriftDismissedFingerprint: restoredDriftDismissedFingerprint,
       // Invocation capabilities the user granted for this session only. Runtime
       // state by design: it reaches neither writeSessionMeta nor the manifest
       // snapshot, so it dies with the runtime and the user is asked again after
@@ -2611,10 +2594,6 @@ export class SessionCoordinator {
       }
       if (shouldPersistRestoredToolNames && snapshotToolNames !== null) {
         metaPatch.toolNames = snapshotToolNames;
-      }
-      if (refreshCapabilitySnapshots) {
-        // #1624 显式刷新：dismissed 状态随旧快照一并失效
-        metaPatch.capabilityDriftDismissedFingerprint = null;
       }
       if (Object.keys(metaPatch).length > 0) {
         await this.writeSessionMeta(sessionPath, metaPatch);
@@ -5030,7 +5009,27 @@ export class SessionCoordinator {
     abortController.signal.throwIfAborted();
     assertVideoInputSupported(entry.session.model, opts?.videos);
     assertAudioInputSupported(entry.session.model, opts?.audios);
-    const promptOpts = buildPromptMediaOptions(opts);
+    let promptPreflightReported = false;
+    const needsPromptReceipt = typeof submitOptions?.afterCachePreflight === "function"
+      || typeof submitOptions?.afterInputAccepted === "function";
+    const notifyPromptPreflight = needsPromptReceipt ? (success: boolean) => {
+      if (promptPreflightReported) return;
+      promptPreflightReported = true;
+      if (!success) return;
+      if (typeof submitOptions?.afterCachePreflight === "function") {
+        const hookResult = submitOptions.afterCachePreflight();
+        if (hookResult && typeof hookResult.then === "function") {
+          throw new TypeError("promptSession afterCachePreflight must be synchronous");
+        }
+      }
+      if (typeof submitOptions?.afterInputAccepted === "function") {
+        const hookResult = submitOptions.afterInputAccepted();
+        if (hookResult && typeof hookResult.then === "function") {
+          throw new TypeError("promptSession afterInputAccepted must be synchronous");
+        }
+      }
+    } : undefined;
+    const promptOpts = buildPromptMediaOptions(opts, notifyPromptPreflight);
     const nativeMediaTurn = engine?.beginCurrentTurnNativeMedia?.(sessionPath, opts);
     if (turnContext) this._setRuntimeValueForPath(this._turnContextBySession, sessionPath, turnContext);
     try {
@@ -5039,12 +5038,6 @@ export class SessionCoordinator {
       // be committed onto a now-streaming Session.
       if (entry.session.isStreaming) throw new Error("session_busy");
       this.preflightSessionInput(sessionPath);
-      if (typeof submitOptions?.afterCachePreflight === "function") {
-        const hookResult = submitOptions.afterCachePreflight();
-        if (hookResult && typeof hookResult.then === "function") {
-          throw new TypeError("promptSession afterCachePreflight must be synchronous");
-        }
-      }
       await entry.session.prompt(text, promptOpts);
     } finally {
       if (turnContext) this._deleteRuntimeValueForPath(this._turnContextBySession, sessionPath);
@@ -5228,7 +5221,7 @@ export class SessionCoordinator {
 
   /**
    * 在已有 session 上切换模型（不创建新 session）。
-   * 如果新模型的上下文窗口容不下当前对话，先压缩/截断。
+   * 如果新模型的上下文窗口容不下当前对话，拒绝切换并提示用户先手动压缩。
    *
    * @param {string} sessionPath
    * @param {object} newModel - Pi SDK Model 对象
@@ -5261,15 +5254,13 @@ export class SessionCoordinator {
 
     entry._switching = true;
     const adaptations = [];
-    const oldModel = session.model;
-    const compactionModel = entry.modelAvailability?.available === false ? newModel : oldModel;
 
     try {
       // 估算当前上下文 token 数
       const msgs = session.agent?.state?.messages || [];
       const usage = session.getContextUsage?.();
       let currentTokens = usage?.tokens;
-      if (currentTokens == null) {
+      if (!Number.isFinite(currentTokens) || currentTokens < 0) {
         // fallback: 逐消息估算
         currentTokens = msgs.reduce((sum, m) => sum + estimateTokens(m), 0);
       }
@@ -5277,39 +5268,7 @@ export class SessionCoordinator {
       const effectiveWindow = Math.floor(newModel.contextWindow * 0.9) - 4000;
 
       if (currentTokens > effectiveWindow) {
-        // 预检：最后一轮对话是否本身就超窗口（此时 compact/truncate 都救不了）
-        const lastUserIdx = msgs.findLastIndex(m => m.role === "user");
-        if (lastUserIdx >= 0) {
-          const lastTurnTokens = msgs.slice(lastUserIdx).reduce((s, m) => s + estimateTokens(m), 0);
-          if (lastTurnTokens > effectiveWindow) {
-            throw new Error("当前对话无法适配目标模型的上下文窗口");
-          }
-        }
-
-        // 尝试压缩
-        try {
-          const compactionResult = await this._compactWithModel(sessionPath, session, effectiveWindow, compactionModel);
-          const hardTruncated = compactionResult?.details?.reason === "cache-preserving-compaction-hard-truncate";
-          adaptations.push(hardTruncated ? "truncated" : "compacted");
-        } catch (compactErr) {
-          log.warn(`compactWithModel failed, falling back to hard truncate: ${compactErr.message}`);
-          // 压缩失败，尝试硬截断
-          try {
-            await this._hardTruncate(sessionPath, session, effectiveWindow);
-            adaptations.push("truncated");
-          } catch (truncErr) {
-            throw new Error(`Failed to fit context into new model window: ${truncErr.message}`);
-          }
-        }
-
-        // 终极检查：压缩/截断后仍然超窗口则拒绝
-        const postMsgs = session.agent.state.messages;
-        const postTokens = postMsgs.reduce((sum, m) => sum + estimateTokens(m), 0);
-        if (postTokens > effectiveWindow) {
-          throw new Error(
-            `Context still exceeds new model window after adaptation (${postTokens} > ${effectiveWindow})`
-          );
-        }
+        throw createModelContextTooLargeError(currentTokens, effectiveWindow);
       }
 
       // 执行模型切换
@@ -5336,41 +5295,6 @@ export class SessionCoordinator {
     } finally {
       entry._switching = false;
     }
-  }
-
-  /**
-   * 用主模型同前缀摘要来压缩对话历史（为 model switch 准备窗口）。
-   * @private
-   */
-  async _compactWithModel(sessionPath: any, session: any, effectiveWindow: any, model: any) {
-    if (!sessionPath) throw new Error("model-switch compaction requires an explicit session path");
-    const sessionId = this._sessionIdForPath(sessionPath);
-    return await runCachePreservingCompactionForSession(session, {
-      model,
-      settings: {
-        enabled: true,
-        reserveTokens: 4000,
-        keepRecentTokens: effectiveWindow,
-      },
-      emitLifecycle: true,
-      lifecycleReason: "model_switch",
-      usageLedger: this._d.getUsageLedger?.(),
-      usageContext: {
-        source: {
-          subsystem: "compaction",
-          operation: "compact",
-          surface: "desktop",
-          trigger: "overflow",
-        },
-        attribution: {
-          kind: "session",
-          agentId: this.resolveSessionOwnership(sessionPath).agentId || this._d.getActiveAgentId?.() || null,
-          ...(sessionId ? { sessionId } : {}),
-          sessionPath,
-        },
-      },
-      onCompacted: () => this._markSessionCompacted(sessionPath),
-    });
   }
 
   /**
@@ -5410,52 +5334,6 @@ export class SessionCoordinator {
       : 0;
     entry.reminderCompactionRevision = revision + 1;
     return true;
-  }
-
-  /**
-   * 硬截断对话历史（无 API 调用，用固定文本作为摘要）。
-   * @private
-   */
-  async _hardTruncate(sessionPath: any, session: any, effectiveWindow: any) {
-    if (!sessionPath) throw new Error("model-switch hard truncation requires an explicit session path");
-    const sm = session.sessionManager;
-    const pathEntries = sm.getBranch();
-    const reason = "model_switch";
-    session?._emit?.({ type: "compaction_start", reason });
-
-    try {
-      const result = computeHardTruncation(pathEntries, effectiveWindow, {
-        summary: "[由于模型切换，早期对话历史已被截断]",
-        reason: "model-switch-truncation",
-      });
-      if (!result) {
-        throw new Error("Cannot hard-truncate: not enough messages or cut at beginning");
-      }
-
-      const saved = await appendCompactionResultToSession(session, result, {
-        fromExtension: false,
-        onCompacted: () => this._markSessionCompacted(sessionPath),
-      });
-      session?._emit?.({
-        type: "compaction_end",
-        reason,
-        result: saved,
-        aborted: false,
-        willRetry: false,
-      });
-      return saved;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      session?._emit?.({
-        type: "compaction_end",
-        reason,
-        result: undefined,
-        aborted: false,
-        willRetry: false,
-        errorMessage: `Compaction failed: ${message}`,
-      });
-      throw error;
-    }
   }
 
   /** Get plan mode for the current (focused) session */
@@ -6284,24 +6162,6 @@ export class SessionCoordinator {
     }
   }
 
-  /**
-   * #1624：返回当前应展示的"工具能力有更新"提示数据；无漂移或已被 dismiss
-   * （dismissed fingerprint === 当前 live fingerprint）时返回 null。
-   * 数据在 restore 完成时算好挂在 sessionEntry 上，这里只做读取与 dismiss 过滤。
-   */
-  getSessionCapabilityDriftNotice(sessionPath: any) {
-    const entry = this._getSessionEntryByPath(sessionPath);
-    const drift = entry?.capabilityDrift;
-    if (!drift?.hasDrift) return null;
-    if (entry.capabilityDriftDismissedFingerprint === drift.fingerprint) return null;
-    return {
-      ...drift,
-      addedToolNames: [...drift.addedToolNames],
-      removedToolNames: [...drift.removedToolNames],
-      invalidToolNames: [...drift.invalidToolNames],
-    };
-  }
-
   _buildLiveToolAvailabilityInputForEntry(
     entry: any,
     sessionPath: any,
@@ -6367,26 +6227,6 @@ export class SessionCoordinator {
     };
   }
 
-  _computeLiveToolSnapshotForEntry(entry: any, sessionPath: any) {
-    const input = this._buildLiveToolAvailabilityInputForEntry(entry, sessionPath);
-    if (!input) return null;
-    const { agent, allToolObjects, context } = input;
-    const allToolNames = toolNamesFromObjects(allToolObjects);
-    const extraDisabledToolNames = [
-      ...getStableFeatureDisabledToolNames(context),
-      ...computeRuntimeDisabledToolNames(
-        allToolObjects,
-        agent.config,
-        context,
-        { warn: (msg) => log.warn(msg) },
-      ),
-    ];
-    const disabled = agent.config?.tools?.disabled ?? DEFAULT_DISABLED_TOOL_NAMES;
-    return computeToolSnapshot(allToolNames, disabled, {
-      extraDisabled: extraDisabledToolNames,
-    });
-  }
-
   _computeReminderUnavailableToolNamesForEntry(entry: any, sessionPath: any) {
     const frozenToolNames = uniqueToolNames(Array.isArray(entry?.toolNames) ? entry.toolNames : []);
     if (frozenToolNames.length === 0) return [];
@@ -6419,57 +6259,6 @@ export class SessionCoordinator {
     return frozenToolNames
       .filter((name) => !liveToolNames.has(name))
       .sort((left, right) => left.localeCompare(right));
-  }
-
-  markCapabilitySnapshotsStale({ agentId = null, reason = "capability_changed" }: any = {}) {
-    const targetAgentId = typeof agentId === "string" && agentId ? agentId : null;
-    let scanned = 0;
-    let marked = 0;
-    for (const entry of this._sessions.values()) {
-      if (!entry?.sessionPath || !entry?.session) continue;
-      if (targetAgentId && entry.agentId !== targetAgentId) continue;
-      scanned += 1;
-      const frozenToolNames = Array.isArray(entry.runtimeToolNames)
-        ? entry.runtimeToolNames
-        : (entry.activeToolDefinitions || []).map((tool) => tool?.name).filter(Boolean);
-      const liveToolNames = this._computeLiveToolSnapshotForEntry(entry, entry.sessionPath);
-      if (!liveToolNames) continue;
-      const liveToolNameSet = new Set(liveToolNames);
-      const drift = buildSessionCapabilityDrift({
-        frozenToolNames,
-        liveToolNames,
-        invalidToolNames: Array.isArray(entry.unavailableToolNames)
-          ? entry.unavailableToolNames.filter((name) => !liveToolNameSet.has(name))
-          : [],
-        frozenSystemPrompt: "",
-        liveSystemPrompt: "",
-      });
-      entry.capabilityDrift = drift.hasDrift ? { ...drift, reason } : null;
-      if (drift.hasDrift) {
-        marked += 1;
-        this._emitSessionMetadataUpdated(entry.sessionPath, {
-          capabilityDrift: this.getSessionCapabilityDriftNotice(entry.sessionPath),
-        });
-      } else {
-        this._emitSessionMetadataUpdated(entry.sessionPath, { capabilityDrift: null });
-      }
-    }
-    return { ok: true, scanned, marked };
-  }
-
-  /**
-   * #1624：记录"用户关闭了当前 fingerprint 的提示"。持久化在 session-meta
-   * （跟 session 走，跨重启生效）；指纹再次变化时才重新提示。
-   */
-  async dismissSessionCapabilityDrift(sessionPath: any, fingerprint: any) {
-    this._assertActiveDesktopSessionPath(sessionPath, "dismissSessionCapabilityDrift");
-    if (typeof fingerprint !== "string" || !fingerprint) {
-      throw new Error("dismissSessionCapabilityDrift: fingerprint required");
-    }
-    const entry = this._getSessionEntryByPath(sessionPath);
-    if (entry) entry.capabilityDriftDismissedFingerprint = fingerprint;
-    await this.writeSessionMeta(sessionPath, { capabilityDriftDismissedFingerprint: fingerprint });
-    return { ok: true };
   }
 
   async reloadSessionRuntime(sessionPath: any, { refreshCapabilitySnapshots = false }: any = {}) {

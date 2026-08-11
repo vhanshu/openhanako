@@ -56,6 +56,16 @@ import { dispatchStreamKey } from '../../services/stream-key-dispatcher';
 import { handleAppEvent } from '../../services/app-event-actions';
 import { clearMessageLiveVersion, readMessageLiveVersion } from '../../stores/message-live-version';
 import { loadSessions } from '../../stores/session-actions';
+import zh from '../../../locales/zh.json';
+
+/** Resolve a dotted i18n key against the real Chinese pack, the way window.t does. */
+function translateZh(key: string): string {
+  const value = key.split('.').reduce<unknown>(
+    (node, part) => (node && typeof node === 'object' ? (node as Record<string, unknown>)[part] : undefined),
+    zh as unknown,
+  );
+  return typeof value === 'string' ? value : key;
+}
 
 afterEach(() => {
   resetSessionRefreshSchedulerForTest();
@@ -840,16 +850,6 @@ describe('ws-message-handler session-scoped desktop events', () => {
       metadata: {
         pinnedAt: '2026-04-29T08:00:00.000Z',
         thinkingLevel: 'high',
-        capabilityDrift: {
-          version: 1,
-          hasDrift: true,
-          fingerprint: 'fp-live',
-          frozenFingerprint: 'fp-frozen',
-          addedToolNames: ['mcp_github_search'],
-          removedToolNames: [],
-          invalidToolNames: [],
-          promptChanged: false,
-        },
       },
     });
 
@@ -861,22 +861,16 @@ describe('ws-message-handler session-scoped desktop events', () => {
       { path: '/session/b.jsonl', pinnedAt: null },
     ]);
     expect(useStore.getState().thinkingLevel).toBe('high');
-    expect(useStore.getState().capabilityDriftBySession['/session/a.jsonl']).toMatchObject({
-      fingerprint: 'fp-live',
-      addedToolNames: ['mcp_github_search'],
-    });
 
     handleServerMessage({
       type: 'session_metadata_updated',
       sessionPath: '/session/b.jsonl',
       metadata: {
         thinkingLevel: 'off',
-        capabilityDrift: null,
       },
     });
 
     expect(useStore.getState().thinkingLevel).toBe('high');
-    expect(useStore.getState().capabilityDriftBySession['/session/b.jsonl']).toBeUndefined();
   });
 
   it('merges a pin order update into the matching session', () => {
@@ -1105,6 +1099,7 @@ describe('ws-message-handler compaction lifecycle', () => {
       ],
       chatSessions: {},
       compactingSessions: [],
+      compactionModeBySession: {},
       contextTokens: null,
       contextWindow: null,
       contextPercent: null,
@@ -1119,14 +1114,19 @@ describe('ws-message-handler compaction lifecycle', () => {
       type: 'compaction_start',
       sessionPath: '/session/b.jsonl',
       reason: 'threshold',
+      mode: 'lossy_local',
     });
 
     expect(useStore.getState().compactingSessions).toEqual(['/session/b.jsonl']);
+    expect(useStore.getState().compactionModeBySession).toEqual({
+      '/session/b.jsonl': 'lossy_local',
+    });
   });
 
   it('tracks compaction_end and preserves the provided context window when tokens are unknown', () => {
     useStore.setState({
       compactingSessions: ['/session/b.jsonl'],
+      compactionModeBySession: { '/session/b.jsonl': 'lossy_local' },
     } as never);
 
     handleServerMessage({
@@ -1138,6 +1138,7 @@ describe('ws-message-handler compaction lifecycle', () => {
     });
 
     expect(useStore.getState().compactingSessions).toEqual([]);
+    expect(useStore.getState().compactionModeBySession).toEqual({});
     expect(useStore.getState().contextBySession['/session/b.jsonl']).toEqual({
       tokens: null,
       window: 200_000,
@@ -1181,11 +1182,16 @@ describe('ws-message-handler compaction lifecycle', () => {
   });
 
   it('tracks accepted and clears succeeded results by sessionId', () => {
-    handleServerMessage({ type: 'compaction_accepted', sessionId: 'sess_a' });
+    handleServerMessage({ type: 'compaction_accepted', sessionId: 'sess_a', mode: 'lossy_local' });
     expect(useStore.getState().compactingSessions).toEqual(['sess_a']);
+    expect(useStore.getState().compactionModeBySession).toEqual({ sess_a: 'lossy_local' });
+
+    handleServerMessage({ type: 'compaction_start', sessionId: 'sess_a' });
+    expect(useStore.getState().compactionModeBySession).toEqual({ sess_a: 'lossy_local' });
 
     handleServerMessage({ type: 'compaction_result', sessionId: 'sess_a', status: 'succeeded' });
     expect(useStore.getState().compactingSessions).toEqual([]);
+    expect(useStore.getState().compactionModeBySession).toEqual({});
   });
 
   it('clears busy and surfaces noop and failed results', () => {
@@ -1700,5 +1706,57 @@ describe('ws-message-handler turn_end side effects', () => {
     await vi.advanceTimersByTimeAsync(300);
 
     expect(loadSessions).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ws-message-handler error presentation', () => {
+  beforeEach(() => {
+    vi.stubGlobal('window', { t: translateZh });
+    useStore.setState({
+      currentSessionPath: '/session/a.jsonl',
+      pendingNewSession: false,
+      sessionLocatorsById: {},
+      sessions: [],
+      inlineErrors: {},
+      toasts: [],
+    } as never);
+  });
+
+  it('shows the generic internal-contract sentence and hides the raw assertion in the details', () => {
+    handleServerMessage({
+      type: 'error',
+      code: 'internal_contract',
+      message: 'agentId required',
+      sessionPath: '/session/a.jsonl',
+    });
+
+    const shown = useStore.getState().inlineErrors['/session/a.jsonl'];
+    expect(shown).toEqual({
+      text: translateZh('error.code.internalContract'),
+      detail: 'agentId required',
+      code: 'internal_contract',
+    });
+    expect(shown?.text).not.toContain('agentId');
+  });
+
+  // 一条既没有 sessionPath 也没有 sessionId 的身份错误没有会话可以挂靠，只能走 toast。
+  // 少了这一档，服务端认定的调用方 bug 会退化成一行 console.warn，用户什么也看不到。
+  it('toasts an identity error that carries no session to attach to', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    handleServerMessage({
+      type: 'error',
+      code: 'internal_contract',
+      message: 'session identity required',
+    });
+
+    expect(useStore.getState().toasts).toEqual([expect.objectContaining({
+      text: translateZh('error.code.internalContract'),
+      type: 'error',
+      errorCode: 'internal_contract',
+    })]);
+    expect(warn).not.toHaveBeenCalled();
+
+    warn.mockRestore();
   });
 });

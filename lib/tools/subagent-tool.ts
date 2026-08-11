@@ -20,7 +20,7 @@ import {
   normalizeExecutorMetadata,
 } from "../subagent-executor-metadata.ts";
 
-// subagent 工具访问（剥离 vs 拦截、只读档位）收口在 ./subagent-tool-policy.js（resolveSubagentToolAccess）。
+// subagent 工具访问（剥离 vs 拦截、只读档位）收口在 ./subagent-tool-policy.ts（resolveSubagentToolAccess）。
 // 默认甲（Codex 式）：给全集工具 + 拦截层限制（防自递归在 classifySessionPermission 的 subagent 上下文）。
 const SUBAGENT_TIMEOUT_MS = 30 * 60 * 1000; // 30 分钟
 
@@ -384,6 +384,7 @@ export function createSubagentTool(deps) {
           mergeExecutorMetadata({
             type: "subagent",
             interlude: true,
+            deliveryIntent: "trigger_parent_turn",
             threadId,
             threadKind,
             label,
@@ -732,6 +733,7 @@ export function createSubagentReplyTool(deps) {
       store.defer(taskId, parentSessionInputForPath(deps, parentSessionPath), mergeExecutorMetadata({
         type: "subagent",
         interlude: true,
+        deliveryIntent: "trigger_parent_turn",
         threadId,
         threadKind,
         label: initialThread.label || null,

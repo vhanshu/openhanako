@@ -80,6 +80,10 @@ const {
   settleLegacyGpuPreferenceMigration,
 } = require("./src/shared/gpu-startup-policy.cjs");
 const {
+  buildInstallAclHealDiagnostics,
+  maybeHealWin32InstallAcl,
+} = require("./src/shared/win32-install-acl-heal.cjs");
+const {
   buildWin32ServerEnv,
 } = require("./src/shared/server-process-env.cjs");
 const {
@@ -279,6 +283,37 @@ if (process.platform === "win32") {
   app.setAppUserModelId(APP_USER_MODEL_ID);
 }
 
+// 必须先于 resolveGpuStartupPolicy：ACL 自愈成功时会清掉 autoGpuMode / 陈旧
+// pending 标记，本次启动就能直接回到 hardware，而不是等下一次启动。
+if (process.platform === "win32") {
+  try {
+    // appVersion 取壳版本：这里是"安装面身份"（哪个安装目录里的哪个壳），与
+    // 展示层禁止消费 app.getVersion() 的产品版本规则不冲突（同 desktopLaunchDiagnostics）。
+    const healResult = maybeHealWin32InstallAcl({
+      hanakoHome,
+      platform: process.platform,
+      isPackaged: app.isPackaged,
+      installDir: path.dirname(process.execPath),
+      appVersion: app.getVersion(),
+      env: process.env,
+    });
+    if (healResult.status === "healed") {
+      console.log(
+        `[desktop] install-dir sandbox ACE granted${healResult.probed ? `; GPU recovery probe cleared mode ${healResult.clearedMode ?? "(none)"}` : ""}`,
+      );
+    } else if (healResult.status === "ineffective") {
+      console.warn(
+        "[desktop] GPU crashes continued after the sandbox ACE grant; restored the previous compatibility mode. See startup diagnostics for the manual icacls command.",
+      );
+    } else if (healResult.status === "grant-failed") {
+      console.warn(`[desktop] install-dir sandbox ACE grant failed (attempt ${healResult.failureCount}); the installer-side grant remains the fallback`);
+    }
+  } catch (err) {
+    // 自愈是启动增强，绝不能反过来挡启动；失败原因完整落日志与诊断。
+    console.warn("[desktop] install ACL heal skipped due to an unexpected error:", err.message);
+  }
+}
+
 const gpuStartupPolicy = resolveGpuStartupPolicy({
   hanakoHome,
   platform: process.platform,
@@ -446,6 +481,10 @@ let _crashFallbackNotice = null;
  * 诊断专用文案（crash log、`dialog.trainUpdateApplyFailedBody` 这类"进程崩了
  * 请重启"对话框）刻意继续读 `app.getVersion()`，不经这个访问器——那些场景
  * 问的是"哪个壳进程崩了"，不是"用户在用哪个内容版本"。
+ * 该例外的适用范围收窄如下：crash.log 头部自本次起两行并写——壳行（`HanaAgent shell:`）
+ * 保留上述"哪个壳进程崩了"的例外语义，内容行（`Content:`）由本访问器提供。
+ * 原因是热更新后壳版本与内容版本会分叉，只报壳版本会把新内容里的崩溃标成
+ * 老版本，系统性误导排障；两行并写让"哪个壳崩的"和"崩的是哪份代码"都可读。
  */
 function getCurrentContentVersion() {
   return _currentContentVersion || app.getVersion();
@@ -2061,6 +2100,7 @@ function buildServerCrashDiagnostics() {
   }
 
   items.push(buildGpuStartupDiagnostics({ hanakoHome, policy: gpuStartupPolicy, app }));
+  items.push(buildInstallAclHealDiagnostics({ hanakoHome }));
 
   return items.join("\n");
 }
@@ -2210,12 +2250,20 @@ function writeCrashLog(errorMessage) {
   const logs = _serverLogs.join("");
   const timestamp = new Date().toISOString();
   const diagnostics = buildServerCrashDiagnostics();
+  // 内容版本取不到就写 unknown，不猜、也不回落到壳版本——两行必须各自独立，
+  // 否则一行出问题会污染另一行，读日志的人无从分辨。
+  const contentVersion = (() => {
+    try { return getCurrentContentVersion(); } catch { return "unknown"; }
+  })();
 
   const content = redactMainLogText([
     `=== HanaAgent Crash Log ===`,
-    // 壳身份用途：crash log 记录的是"哪个壳进程崩了"，见
-    // getCurrentContentVersion() 声明处对这类诊断文案的例外说明。
-    `HanaAgent: v${app?.getVersion?.() || "unknown"}`,
+    // 壳身份 + 内容版本双行并写：壳行回答"哪个壳进程崩了"（见
+    // getCurrentContentVersion() 声明处对这类诊断文案的例外说明，该例外保留），
+    // 内容行回答"崩的是哪个版本的代码"——热更新后两者会分叉，只写壳版本会把
+    // 新内容里的崩溃标成老版本，误导用户与排障（已实际发生过一次）。
+    `HanaAgent shell: v${app?.getVersion?.() || "unknown"}`,
+    `Content: v${contentVersion}`,
     `Time: ${timestamp}`,
     `Error: ${errorMessage}`,
     `Platform: ${process.platform} ${process.arch}`,
@@ -5482,12 +5530,13 @@ wrapIpcBestEffortHandler("select-folder", async (event) => {
   return result.filePaths[0];
 });
 
-// 选择附件文件（多选文件；Windows/Linux 不支持同一 dialog 同时选文件和文件夹）
-wrapIpcBestEffortHandler("select-files", async (event) => {
+// 选择附件文件（默认多选；Windows/Linux 不支持同一 dialog 同时选文件和文件夹）
+wrapIpcBestEffortHandler("select-files", async (event, options) => {
   const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
   if (!win) return [];
+  const allowMultiple = options?.multiple !== false;
   const result = await dialog.showOpenDialog(win, {
-    properties: ["openFile", "multiSelections"],
+    properties: allowMultiple ? ["openFile", "multiSelections"] : ["openFile"],
     title: mt("dialog.selectFiles", null, "Select Files"),
   });
   if (result.canceled || !result.filePaths.length) return [];

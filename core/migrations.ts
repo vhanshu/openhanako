@@ -57,6 +57,8 @@ import { parseSkillMetadata } from "../lib/skills/skill-metadata.ts";
 import { safeConversationStem } from "../lib/conversations/agent-phone-projection.ts";
 import { DEFAULT_DISABLED_TOOL_NAMES } from "../shared/tool-categories.ts";
 import { ProviderCatalogStore } from "./provider-catalog.ts";
+import { migrationBackupsRoot } from "./migration-backups.ts";
+import { REFERENCE_BLOCK_PREFIX, REMINDER_BLOCK_PREFIX } from "./session-reminders.ts";
 import { repairProviderModelMetadata } from "./provider-model-metadata-migration.ts";
 import { sessionIdFromFilename } from "../lib/session-jsonl.ts";
 import {
@@ -86,7 +88,7 @@ const migrations = {
   // 尊重老用户显式意图：任一 agent 显式 true → 保留开，否则默认关
   6: migrateChannelsToGlobalDefaultOff,
   // 模型能力字段 vision → image 全量重命名（added-models.yaml + agent config.yaml）
-  // 配合 core/model-sync.js 和 core/provider-registry.js 的读时兼容形成双保险
+  // 配合 core/model-sync.ts 和 core/provider-registry.ts 的读时兼容形成双保险
   7: migrateVisionToImage,
   // 修复 migration #5 之后仍有入口把 models.* 写回旧字符串格式的问题
   8: repairPostMigrationModelRefs,
@@ -179,7 +181,13 @@ const migrations = {
   51: migrateUserNameToGlobalPreferences,
   // agent 级 user.name 覆盖层取消：读取侧不再看这个字段，残留字段一并删掉
   52: migrateClearUserNameOverrides,
+  // 标题生成曾直接读注入过信封的首条 user 消息；删掉被信封字面量占满的存量标题
+  53: migrateCleanEnvelopeSessionTitles,
 };
+
+// Migration ids are a single monotonic ladder shared across release channels;
+// a new id must exceed the highest id ever shipped on ANY channel, because the
+// runner treats id <= highWaterMark as completed.
 
 const migrationDependencies = {
   8: [5],
@@ -379,9 +387,7 @@ function cleanDanglingProviderRefs(ctx) {
     }
 
     if (changed) {
-      const tmp = cfgPath + ".tmp";
-      fs.writeFileSync(tmp, YAML.dump(config, { indent: 2, lineWidth: -1, sortKeys: false, quotingType: '"' }), "utf-8");
-      fs.renameSync(tmp, cfgPath);
+      writeSecretFileSync(cfgPath, YAML.dump(config, { indent: 2, lineWidth: -1, sortKeys: false, quotingType: '"' }));
     }
   }
 
@@ -889,9 +895,7 @@ function migrateChannelsToGlobalDefaultOff(ctx) {
     }
 
     if (changed) {
-      const tmp = cfgPath + ".tmp";
-      fs.writeFileSync(tmp, YAML.dump(config, { indent: 2, lineWidth: -1, sortKeys: false, quotingType: '"' }), "utf-8");
-      fs.renameSync(tmp, cfgPath);
+      writeSecretFileSync(cfgPath, YAML.dump(config, { indent: 2, lineWidth: -1, sortKeys: false, quotingType: '"' }));
     }
   }
 
@@ -951,9 +955,7 @@ function migrateBridgeReadOnlyToGlobal(ctx) {
     delete config.bridge.readOnly;
     if (Object.keys(config.bridge).length === 0) delete config.bridge;
 
-    const tmp = cfgPath + ".tmp";
-    fs.writeFileSync(tmp, YAML.dump(config, { indent: 2, lineWidth: -1, sortKeys: false, quotingType: '"' }), "utf-8");
-    fs.renameSync(tmp, cfgPath);
+    writeSecretFileSync(cfgPath, YAML.dump(config, { indent: 2, lineWidth: -1, sortKeys: false, quotingType: '"' }));
     log(`[migrations] #9 ${dir.name}: 移除 agent-level bridge.readOnly`);
   }
 
@@ -1048,9 +1050,7 @@ function migrateUserNameToGlobalPreferences(ctx) {
     delete config.user.name;
     if (Object.keys(config.user).length === 0) delete config.user;
 
-    const tmp = cfgPath + ".tmp";
-    fs.writeFileSync(tmp, YAML.dump(config, { indent: 2, lineWidth: -1, sortKeys: false, quotingType: '"' }), "utf-8");
-    fs.renameSync(tmp, cfgPath);
+    writeSecretFileSync(cfgPath, YAML.dump(config, { indent: 2, lineWidth: -1, sortKeys: false, quotingType: '"' }));
     log(`[migrations] #51 ${dir.name}: 移除与全局值重复的 user.name`);
   }
 }
@@ -1111,11 +1111,77 @@ function migrateClearUserNameOverrides(ctx) {
     delete config.user.name;
     if (Object.keys(config.user).length === 0) delete config.user;
 
-    const tmp = cfgPath + ".tmp";
-    fs.writeFileSync(tmp, YAML.dump(config, { indent: 2, lineWidth: -1, sortKeys: false, quotingType: '"' }), "utf-8");
-    fs.renameSync(tmp, cfgPath);
+    writeSecretFileSync(cfgPath, YAML.dump(config, { indent: 2, lineWidth: -1, sortKeys: false, quotingType: '"' }));
     log(`[migrations] #52 ${dir.name}: 移除失效的 user.name 覆盖`);
   }
+}
+
+/**
+ * 会话标题曾直接取首条 user 消息，而提交路径会在那条消息前面注入 reminder /
+ * reference 信封和附件标记。没配摘要模型的用户于是拿到一堆信封字面量当标题
+ * （截断到 30 字，所以只看得到开头）。
+ *
+ * 这里只删不改：标题条目删掉之后，列表回退到同样剥离过信封的首条消息展示，
+ * 下一轮对话也可以重新生成。判定按前缀而不是完整标记正则——存量标题是截断
+ * 过的，附件标记的结尾方括号大概率已经被切掉了。
+ *
+ * 幂等：脏条目删完之后重跑什么都不做。
+ */
+const ENVELOPE_TITLE_PREFIXES = [
+  REMINDER_BLOCK_PREFIX,
+  REFERENCE_BLOCK_PREFIX,
+  "[attached_",
+  "[SessionFile]",
+];
+
+function collectAgentSessionTitlePaths(agentsDir) {
+  let agentDirs;
+  try {
+    agentDirs = readDirectoryLikeDirentsSync(agentsDir);
+  } catch {
+    return [];
+  }
+
+  const out = [];
+  for (const dir of agentDirs) {
+    const titlePath = path.join(agentsDir, dir.name, "sessions", "session-titles.json");
+    try {
+      if (fs.statSync(titlePath).isFile()) out.push(titlePath);
+    } catch {
+      // 还没生成过标题的 agent 没有这个文件，属于正常情况。
+    }
+  }
+  return out;
+}
+
+function migrateCleanEnvelopeSessionTitles(ctx) {
+  const { agentsDir, log } = ctx;
+  let removed = 0;
+
+  for (const titlePath of collectAgentSessionTitlePaths(agentsDir)) {
+    let titles;
+    try {
+      titles = JSON.parse(fs.readFileSync(titlePath, "utf-8"));
+    } catch (err) {
+      log?.(`[migrations] #53: 跳过无法解析的标题文件 ${titlePath}: ${err.message}`);
+      continue;
+    }
+    if (!titles || typeof titles !== "object" || Array.isArray(titles)) continue;
+
+    let changed = false;
+    for (const [sessionKey, title] of Object.entries(titles)) {
+      if (typeof title !== "string") continue;
+      if (!ENVELOPE_TITLE_PREFIXES.some((prefix) => title.startsWith(prefix))) continue;
+      delete titles[sessionKey];
+      changed = true;
+      removed += 1;
+    }
+    if (!changed) continue;
+
+    atomicWriteSync(titlePath, JSON.stringify(titles, null, 2));
+  }
+
+  log?.(`[migrations] #53: 清除注入信封污染的会话标题（${removed}）`);
 }
 
 /**
@@ -1347,7 +1413,7 @@ function migrateMiniMaxTokenPlanAnthropicEndpoint(ctx) {
     quotingType: "\"",
     forceQuotes: false,
   });
-  atomicWriteSync(ymlPath, yamlStr);
+  writeSecretFileSync(ymlPath, yamlStr);
 
   if (ctx.providerRegistry) {
     ctx.providerRegistry._addedModelsCache = null;
@@ -1404,9 +1470,7 @@ function migrateVisionToImage(ctx) {
         quotingType: "\"",
         forceQuotes: false,
       });
-      const tmp = ymlPath + ".tmp";
-      fs.writeFileSync(tmp, yamlStr, "utf-8");
-      fs.renameSync(tmp, ymlPath);
+      writeSecretFileSync(ymlPath, yamlStr);
     }
   }
 
@@ -1433,13 +1497,10 @@ function migrateVisionToImage(ctx) {
       overrideCount++;
     }
     if (changed) {
-      const tmp = cfgPath + ".tmp";
-      fs.writeFileSync(
-        tmp,
+      writeSecretFileSync(
+        cfgPath,
         YAML.dump(cfg, { indent: 2, lineWidth: -1, sortKeys: false, quotingType: "\"" }),
-        "utf-8"
       );
-      fs.renameSync(tmp, cfgPath);
     }
   }
 
@@ -2093,7 +2154,7 @@ function writeProviderModelMetadataMigrationBackup({ store, hanakoHome, repairs 
     throw new Error("provider catalog source is missing before metadata repair");
   }
 
-  const backupRoot = path.join(hanakoHome, "migration-backups");
+  const backupRoot = migrationBackupsRoot(hanakoHome);
   fs.mkdirSync(backupRoot, { recursive: true });
   ensureSecretDirModeSync(backupRoot);
   const backupDir = fs.mkdtempSync(path.join(backupRoot, "provider-model-metadata-v46-"));
@@ -2211,7 +2272,7 @@ function writeCodexEventIdPollutionRepairBackup({ store, hanakoHome, removed }) 
     throw new Error("provider catalog source is missing before Codex event-id pollution repair");
   }
 
-  const backupRoot = path.join(hanakoHome, "migration-backups");
+  const backupRoot = migrationBackupsRoot(hanakoHome);
   fs.mkdirSync(backupRoot, { recursive: true });
   ensureSecretDirModeSync(backupRoot);
   const backupDir = fs.mkdtempSync(path.join(backupRoot, "codex-model-id-pollution-v49-"));
@@ -2376,7 +2437,7 @@ function migrateStableDingTalkCredentialsToLegacyAuthMode(ctx) {
     }
 
     try {
-      atomicWriteSync(
+      writeSecretFileSync(
         configPath,
         YAML.dump(config, {
           indent: 2,
@@ -2460,7 +2521,7 @@ function preserveStableCompatibleWorkspaceSkillDiscovery(ctx) {
       discover_compatible_project_skills: true,
     };
     try {
-      atomicWriteSync(
+      writeSecretFileSync(
         configPath,
         YAML.dump(config, {
           indent: 2,
@@ -2508,7 +2569,7 @@ function removeCodexImageSizeDefaultFromPluginConfig(hanakoHome, log) {
   const changed = removeCodexImageSizeDefault(config?.global?.providerDefaults);
   if (!changed) return false;
 
-  atomicWriteSync(configPath, JSON.stringify(config, null, 2) + "\n");
+  writeSecretFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
   return true;
 }
 
@@ -2670,7 +2731,7 @@ function migrateGeminiPluginConfig(hanakoHome, log) {
   }
   const changed = migrateGeminiImageConfigRecord(config?.global);
   if (!changed) return false;
-  atomicWriteSync(configPath, JSON.stringify(config, null, 2) + "\n");
+  writeSecretFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
   return true;
 }
 
@@ -3242,13 +3303,10 @@ function cleanupSummarizerCompilerRemnants(ctx) {
     }
 
     if (changed) {
-      const tmp = cfgPath + ".tmp";
-      fs.writeFileSync(
-        tmp,
+      writeSecretFileSync(
+        cfgPath,
         YAML.dump(config, { indent: 2, lineWidth: -1, sortKeys: false, quotingType: "\"" }),
-        "utf-8"
       );
-      fs.renameSync(tmp, cfgPath);
     }
   }
 }
@@ -3423,9 +3481,7 @@ function migrateGeminiOpenAICompatToNative(ctx) {
       quotingType: "\"",
       forceQuotes: false,
     });
-    const tmp = ymlPath + ".tmp";
-    fs.writeFileSync(tmp, yamlStr, "utf-8");
-    fs.renameSync(tmp, ymlPath);
+    writeSecretFileSync(ymlPath, yamlStr);
     if (ctx.providerRegistry) {
       ctx.providerRegistry._addedModelsCache = null;
       ctx.providerRegistry._addedModelsMtime = 0;
@@ -3637,9 +3693,7 @@ function repairModelsJsonPiInputSchema(ctx) {
   }
 
   if (patched > 0) {
-    const tmp = modelsJsonPath + ".tmp";
-    fs.writeFileSync(tmp, JSON.stringify(raw, null, 4) + "\n", "utf-8");
-    fs.renameSync(tmp, modelsJsonPath);
+    writeSecretFileSync(modelsJsonPath, JSON.stringify(raw, null, 4) + "\n");
   }
   return patched;
 }
@@ -3746,13 +3800,10 @@ function promoteAgentVideoOverrides(ctx) {
       if (Object.keys(cfg.models.overrides).length === 0) {
         delete cfg.models.overrides;
       }
-      const tmp = cfgPath + ".tmp";
-      fs.writeFileSync(
-        tmp,
+      writeSecretFileSync(
+        cfgPath,
         YAML.dump(cfg, { indent: 2, lineWidth: -1, sortKeys: false, quotingType: "\"" }),
-        "utf-8",
       );
-      fs.renameSync(tmp, cfgPath);
     }
   }
 
@@ -3760,9 +3811,8 @@ function promoteAgentVideoOverrides(ctx) {
     const header =
       "# HanaAgent 供应商配置（全局，跨 agent 共享）\n" +
       "# 由设置页面管理\n\n";
-    const tmp = ymlPath + ".tmp";
-    fs.writeFileSync(
-      tmp,
+    writeSecretFileSync(
+      ymlPath,
       header + YAML.dump(raw, {
         indent: 2,
         lineWidth: -1,
@@ -3770,9 +3820,7 @@ function promoteAgentVideoOverrides(ctx) {
         quotingType: "\"",
         forceQuotes: false,
       }),
-      "utf-8",
     );
-    fs.renameSync(tmp, ymlPath);
   }
 
   return patched;
@@ -4094,9 +4142,8 @@ function repairLegacyDeepSeekProviderModelIds(ctx) {
     const header =
       "# HanaAgent 供应商配置（全局，跨 agent 共享）\n" +
       "# 由设置页面管理\n\n";
-    const tmp = ymlPath + ".tmp";
-    fs.writeFileSync(
-      tmp,
+    writeSecretFileSync(
+      ymlPath,
       header + YAML.dump(raw, {
         indent: 2,
         lineWidth: -1,
@@ -4104,9 +4151,7 @@ function repairLegacyDeepSeekProviderModelIds(ctx) {
         quotingType: "\"",
         forceQuotes: false,
       }),
-      "utf-8",
     );
-    fs.renameSync(tmp, ymlPath);
   }
 
   return patched;
@@ -4136,13 +4181,10 @@ function normalizeLegacyMemoryMasterDefaults(ctx) {
       ? { ...cfg.memory, enabled: true }
       : { enabled: true };
 
-    const tmp = cfgPath + ".tmp";
-    fs.writeFileSync(
-      tmp,
+    writeSecretFileSync(
+      cfgPath,
       YAML.dump(cfg, { indent: 2, lineWidth: -1, sortKeys: false, quotingType: "\"" }),
-      "utf-8",
     );
-    fs.renameSync(tmp, cfgPath);
     patched++;
     log?.(`[migrations] #13 ${dir.name}: memory.enabled set to true for legacy implicit default`);
   }
@@ -4328,21 +4370,13 @@ function normalizeLegacyStorageKind(ref, hanakoHome) {
   if (storageKind !== "managed_cache") return storageKind;
 
   const managedRoot = path.join(hanakoHome, "session-files");
-  const resolved = normalizeExistingOrResolvedPathForMigration(ref.filePath);
-  const root = normalizeExistingOrResolvedPathForMigration(managedRoot);
+  // 纯比较，两侧都走共享身份键。
+  const resolved = filesystemIdentityKeySync(ref.filePath);
+  const root = filesystemIdentityKeySync(managedRoot);
   const rel = path.relative(root, resolved);
   return rel === "" || (!!rel && !rel.startsWith("..") && !path.isAbsolute(rel))
     ? "managed_cache"
     : "external";
-}
-
-function normalizeExistingOrResolvedPathForMigration(filePath) {
-  const resolved = path.resolve(filePath);
-  try {
-    return fs.realpathSync(resolved);
-  } catch {
-    return resolved;
-  }
 }
 
 function legacyBrowserScreenshot(msg) {

@@ -27,11 +27,6 @@ export function createMcpRoute(engine) {
     });
   }
 
-  async function markCapabilitySnapshotsStale(payload: Record<string, unknown>) {
-    const rt = runtime();
-    await rt?._markCapabilitySnapshotsStale?.(payload);
-  }
-
   // The callback always points at the first-class path. The legacy path stays
   // routable for redirect URIs issued before the move.
   function redirectUriForRequest(c) {
@@ -96,7 +91,6 @@ export function createMcpRoute(engine) {
     const { enabled } = await c.req.json();
     try {
       await rt.setEnabled(enabled === true);
-      await markCapabilitySnapshotsStale({ reason: "mcp.global.enabled" });
       return currentState(c);
     } catch (err) {
       return c.json({ error: err.message }, 400);
@@ -147,7 +141,6 @@ export function createMcpRoute(engine) {
     if (!rt) return c.json({ error: "not initialized" }, 503);
     try {
       const connector = rt.addConnector(await c.req.json());
-      await markCapabilitySnapshotsStale({ reason: "mcp.connector.add", connectorId: connector.id });
       // Adding a connector is a request to use it. Starting is not awaited so a
       // slow or unreachable server cannot hold up the add result; a failure is
       // recorded as the connector's error instead.
@@ -173,7 +166,6 @@ export function createMcpRoute(engine) {
     }
     try {
       const results = rt.addConnectors(connectors);
-      await markCapabilitySnapshotsStale({ reason: "mcp.connector.add" });
       // Starting is deliberately not awaited: a connector that is slow or down
       // must not hold up the import result.
       for (const result of results) {
@@ -191,7 +183,6 @@ export function createMcpRoute(engine) {
     if (!rt) return c.json({ error: "not initialized" }, 503);
     try {
       const connector = await rt.updateConnector(c.req.param("id"), await c.req.json());
-      await markCapabilitySnapshotsStale({ reason: "mcp.connector.update", connectorId: connector.id });
       const state = rt.getState();
       const publicConnector = state.connectors.find((item) => item.id === connector.id) || connector;
       return c.json({ connector: publicConnector, server: publicConnector, state });
@@ -205,7 +196,6 @@ export function createMcpRoute(engine) {
     if (!rt) return c.json({ error: "not initialized" }, 503);
     try {
       await rt.removeConnector(c.req.param("id"));
-      await markCapabilitySnapshotsStale({ reason: "mcp.connector.remove", connectorId: c.req.param("id") });
       return c.json(rt.getState());
     } catch (err) {
       return c.json({ error: err.message }, 400);
@@ -217,10 +207,14 @@ export function createMcpRoute(engine) {
     if (!rt) return c.json({ error: "not initialized" }, 503);
     try {
       const id = c.req.param("id");
-      if (action === "start") await rt.startConnector(id);
-      else if (action === "stop") {
+      // The switch is persisted before the transport is touched, so the user's
+      // decision survives a restart whether or not the connection succeeds.
+      if (action === "start") {
+        await rt.setConnectorEnabled(id, true);
+        await rt.startConnector(id);
+      } else if (action === "stop") {
+        await rt.setConnectorEnabled(id, false);
         await rt.stopConnector(id);
-        await markCapabilitySnapshotsStale({ reason: "mcp.connector.stop", connectorId: id });
       }
       else if (action === "refresh-tools") {
         const tools = await rt.refreshTools(id);
@@ -242,14 +236,6 @@ export function createMcpRoute(engine) {
         c.req.param("id"),
         patch,
       );
-      const reason = patch?.tools && typeof patch.tools === "object"
-        ? "mcp.agent.tool.enable"
-        : "mcp.agent.connector.enable";
-      await markCapabilitySnapshotsStale({
-        reason,
-        agentId: c.req.param("agentId"),
-        connectorId: c.req.param("id"),
-      });
       return c.json({ config });
     } catch (err) {
       return c.json({ error: err.message }, 400);
@@ -428,6 +414,13 @@ function statusForError(message) {
   if (/not found|content not found/i.test(message)) return 404;
   if (/not visible|does not expose/i.test(message)) return 403;
   if (/not running|disabled globally/i.test(message)) return 409;
+  // One connector switched off by the user. Its sibling states above already
+  // answer 409, and this is the same kind of answer: nothing upstream failed,
+  // the system is simply in a state that conflicts with the request, and the
+  // remedy is a switch the user owns. Matched on the shared part of the wording
+  // so both refusals land here — the one raised when something needs the
+  // connector, and the one raised when a start is refused outright.
+  if (/is disabled; enable it in Settings/i.test(message)) return 409;
   if (/must start with ui:\/\/|uri is required|invalid JSON request body/i.test(message)) return 400;
   return 502;
 }

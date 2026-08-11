@@ -5,6 +5,14 @@
  * Without this, a new call site added later would silently fall back to the
  * generic writer, and a newly registered credential path would never be healed
  * on machines that already have the file.
+ *
+ * What this guard does and does not cover, stated plainly so nobody reads more
+ * into a green run than it earns: it pins the write shape of the files listed
+ * below, and it pins the healer's coverage of the paths those stores own. It
+ * does not decide which files belong on those lists. A credential written from
+ * a file nobody added here passes this guard; what catches that one is the
+ * persistence census, which forces every production write to be claimed by a
+ * store descriptor.
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +21,7 @@ import { describe, expect, it } from "vitest";
 import { discoverSites } from "../scripts/scan-persistent-stores.mjs";
 import { SECRET_TREES, TOP_LEVEL_SECRET_FILES } from "../core/credential-file-healer.ts";
 import { LOCAL_PROVIDER_PLUGINS_DIR } from "../core/local-provider-plugin-store.ts";
+import { SECURITY_DIR } from "../core/security-dir.ts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -29,6 +38,7 @@ const EXCLUSIVE_CREDENTIAL_WRITERS = [
   "core/local-user-account.ts",
   "core/web-session-store.ts",
   "core/migrate-providers.ts",
+  "core/plugin-config.ts",
   "lib/memory/config-loader.ts",
   "shared/migrate-config-scope.ts",
 ];
@@ -40,6 +50,7 @@ const EXCLUSIVE_CREDENTIAL_WRITERS = [
 const MIXED_CREDENTIAL_WRITERS = [
   "core/provider-registry.ts",
   "core/migrations.ts",
+  "core/first-run.ts",
 ];
 
 /**
@@ -90,6 +101,12 @@ describe("startup healer coverage", () => {
 
   it("covers the migration backups that copy credentials aside", () => {
     expect(SECRET_TREES).toContain("migration-backups");
+  });
+
+  // Same reasoning as above: taken from the module the key services import, not
+  // spelled again here.
+  it("covers the security tree that holds signing keys and grant records", () => {
+    expect(SECRET_TREES).toContain(SECURITY_DIR);
   });
 
   it.each([

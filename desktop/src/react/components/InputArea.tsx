@@ -12,7 +12,7 @@ import { useStore } from '../stores';
 import { HOME_DRAFT_KEY } from '../../../../shared/input-drafts.ts';
 import { selectPreviewItems, selectActiveTabId } from '../stores/preview-slice';
 import { sessionScopedListIncludes, sessionScopedValue } from '../stores/session-slice';
-import { isSessionCompacting } from '../stores/context-slice';
+import { getSessionCompactionMode, isSessionCompacting } from '../stores/context-slice';
 import { selectSessionFiles } from '../stores/selectors/file-refs';
 import { isImageFile, isVideoFile } from '../utils/format';
 import { extOfName, isAudioFileName, kindOfFileName } from '../utils/file-kind';
@@ -26,7 +26,6 @@ import {
   upsertOptimisticSessionFirstMessage,
   type SessionRef,
 } from '../stores/session-actions';
-import { revealDeskDirectory, toggleJianSidebar } from '../stores/desk-actions';
 import { getWebSocket } from '../services/websocket';
 import { collectUiContext } from '../utils/ui-context';
 import { formatQuotedSelectionForPrompt } from '../utils/quoted-selection';
@@ -39,7 +38,6 @@ import { InputContextRow } from './input/InputContextRow';
 import { InputControlBar } from './input/InputControlBar';
 import type { PermissionMode } from './input/PlanModeButton';
 import { SessionConfirmationPrompt } from './input/SessionConfirmationPrompt';
-import { CapabilityDriftNotice } from './input/CapabilityDriftNotice';
 import { serializeEditor } from '../utils/editor-serializer';
 import {
   buildFileMentionItems,
@@ -76,7 +74,9 @@ import {
   type SlashItem,
 } from './input/slash-commands';
 import { attachFilesFromPaths } from '../MainContent';
+import { searchDeskFiles } from '../stores/desk-actions';
 import { hanaFetch } from '../hooks/use-hana-fetch';
+import type { DeskSearchResult } from '../types';
 import styles from './input/InputArea.module.css';
 import type { AudioWaveform, ChatListItem, SessionConfirmationBlock, SessionModel } from '../stores/chat-types';
 
@@ -447,6 +447,7 @@ function InputAreaInner({ surface }: Required<InputAreaProps>) {
     : null);
   const deletedAgentReadOnly = currentSessionProjection?.agentDeleted === true;
   const compacting = useStore(s => isSessionCompacting(s, currentSessionPath));
+  const compactionMode = useStore(s => getSessionCompactionMode(s, currentSessionPath));
   const screenshotBusy = useStore(s => s.screenshotTaskCount > 0);
   const screenshotProgress = useStore(s => s.screenshotProgress);
   const inlineError = useStore(s => s.currentSessionPath ? (sessionScopedValue(s, s.inlineErrors, s.currentSessionPath) ?? null) : null);
@@ -478,13 +479,11 @@ function InputAreaInner({ surface }: Required<InputAreaProps>) {
   const modelUnavailableMessage = modelSelectionRequired
     ? t(modelUnavailableMessageKey(sessionModel?.unavailableReason))
     : null;
-  // #1624：当前 session 的工具能力漂移提示（服务端 restore 时算好，前端只消费）
-  const capabilityDrift = useStore(s => s.currentSessionPath ? (sessionScopedValue(s, s.capabilityDriftBySession, s.currentSessionPath) ?? null) : null);
   const capabilityRefreshing = useStore(s => sessionScopedListIncludes(s, s.capabilityRefreshingSessions, s.currentSessionPath));
   const compactingStatus = capabilityRefreshing || compacting;
   const compactingStatusLabel = capabilityRefreshing
-    ? t('session.capabilityDrift.refreshing')
-    : t('chat.compacting');
+    ? t('input.refreshAndCompactBusy')
+    : t(compactionMode === 'lossy_local' ? 'chat.instantSimpleCompaction' : 'chat.compacting');
   const currentModelInfo = sessionModelInfo || globalModelInfo;
   const availableThinkingLevels = useMemo(
     () => getModelThinkingLevels(currentModelInfo),
@@ -527,6 +526,7 @@ function InputAreaInner({ surface }: Required<InputAreaProps>) {
   const slashBtnRef = useRef<HTMLButtonElement>(null);
   const browserFileInputRef = useRef<HTMLInputElement>(null);
   const slashDismissedTextRef = useRef<string | null>(null);
+  const fileMentionSearchSeqRef = useRef(0);
   const inputSurfaceRef = useRef<HTMLDivElement>(null);
   const inputCardRef = useRef<HTMLDivElement>(null);
   const focusFrameRef = useRef<number | null>(null);
@@ -538,7 +538,8 @@ function InputAreaInner({ surface }: Required<InputAreaProps>) {
   const [fileSelected, setFileSelected] = useState(0);
   const [fileMentionRange, setFileMentionRange] = useState<FileMentionRange | null>(null);
   const [fileMentionQuery, setFileMentionQuery] = useState('');
-  const [fileMentionBusy] = useState(false);
+  const [fileMentionSearchResults, setFileMentionSearchResults] = useState<DeskSearchResult[]>([]);
+  const [fileMentionBusy, setFileMentionBusy] = useState(false);
   const [continuingDeletedAgentSession, setContinuingDeletedAgentSession] = useState(false);
   const [deletedAgentContinueError, setDeletedAgentContinueError] = useState<string | null>(null);
   const [audioRecorderOpen, setAudioRecorderOpen] = useState(false);
@@ -848,7 +849,12 @@ function InputAreaInner({ surface }: Required<InputAreaProps>) {
     await executeCompact(t, setSlashBusy, () => { editor?.commands.clearContent(); }, setSlashMenuOpen)();
   }, [editor, t]);
 
-  const slashAgentId = pendingNewSession ? (selectedAgentId || currentAgentId) : currentAgentId;
+  // 这个输入框归属哪个助手：已有会话以会话自己的记录为准，新会话草稿才用选中的助手。
+  // 菜单里列出谁的命令、@ 菜单把谁认作"当前助手"、以及 slash 请求发给服务端的执行身份，
+  // 三处都读这一个值——它们说的是同一件事，分头算迟早会算出不一样的答案。
+  const slashAgentId = pendingNewSession
+    ? (selectedAgentId || currentAgentId)
+    : (currentSessionProjection?.agentId || currentAgentId);
   const skillItems = useSkillSlashItems({ enabled: surface !== 'mobile', agentId: slashAgentId });
   const serverCommandItems = useServerSlashCommandItems({ enabled: surface !== 'mobile', agentId: slashAgentId });
 
@@ -875,15 +881,50 @@ function InputAreaInner({ surface }: Required<InputAreaProps>) {
     deskFiles,
     deskBasePath,
     deskCurrentPath: '',
-    searchResults: [],
+    searchResults: fileMentionSearchResults,
+    includeWorkspace: true,
     limit: 20,
   }), [
     attachedFiles,
     deskBasePath,
     deskFiles,
     fileMentionQuery,
+    fileMentionSearchResults,
     sessionFiles,
   ]);
+
+  useEffect(() => {
+    if (!fileMenuOpen) {
+      setFileMentionSearchResults([]);
+      setFileMentionBusy(false);
+      return;
+    }
+
+    const query = fileMentionQuery.trim();
+    const seq = ++fileMentionSearchSeqRef.current;
+    if (!query) {
+      setFileMentionSearchResults([]);
+      setFileMentionBusy(false);
+      return;
+    }
+
+    setFileMentionBusy(true);
+    const timer = window.setTimeout(() => {
+      searchDeskFiles(query)
+        .then((results) => {
+          if (fileMentionSearchSeqRef.current === seq) setFileMentionSearchResults(results);
+        })
+        .catch((err: unknown) => {
+          if (fileMentionSearchSeqRef.current === seq) setFileMentionSearchResults([]);
+          console.warn('[file-mention] search failed', err);
+        })
+        .finally(() => {
+          if (fileMentionSearchSeqRef.current === seq) setFileMentionBusy(false);
+        });
+    }, 120);
+
+    return () => window.clearTimeout(timer);
+  }, [fileMentionQuery, fileMenuOpen]);
 
   const sessionMentionItems = useMemo(() => buildSessionMentionItems({
     sessions,
@@ -893,10 +934,8 @@ function InputAreaInner({ surface }: Required<InputAreaProps>) {
   const agentMentionItems = useMemo(() => buildAgentMentionItems({
     agents,
     query: fileMentionQuery,
-    currentAgentId: pendingNewSession
-      ? (selectedAgentId || currentAgentId)
-      : (currentSessionProjection?.agentId || currentAgentId),
-  }), [agents, currentAgentId, currentSessionProjection?.agentId, fileMentionQuery, pendingNewSession, selectedAgentId]);
+    currentAgentId: slashAgentId,
+  }), [agents, fileMentionQuery, slashAgentId]);
 
   const mentionItems = useMemo<MentionMenuItem[]>(() => {
     if (mentionTab === 'sessions') return sessionMentionItems;
@@ -1573,6 +1612,7 @@ function InputAreaInner({ surface }: Required<InputAreaProps>) {
     if (item.type === 'server-command') {
       void executeSlashViaWs(
         item.name,
+        slashAgentId,
         setSlashBusy,
         () => { editor?.commands.clearContent(); },
         setSlashMenuOpen,
@@ -1590,7 +1630,7 @@ function InputAreaInner({ surface }: Required<InputAreaProps>) {
       .insertContent(' ')
       .run();
     setSlashMenuOpen(false);
-  }, [editor, inputLocked, inputText]);
+  }, [editor, inputLocked, inputText, slashAgentId]);
 
   const handleFileMentionSelect = useCallback((item: FileMentionItem) => {
     if (inputLocked) return;
@@ -2144,12 +2184,11 @@ function InputAreaInner({ surface }: Required<InputAreaProps>) {
 
   const handleSlashResultClick = useCallback(() => {
     if (slashResult?.filePath) {
-      window.platform?.openFile?.(slashResult.filePath);
+      window.platform?.showInFinder?.(slashResult.filePath);
       return;
     }
     if (!slashResult?.deskDir) return;
-    toggleJianSidebar(true);
-    void revealDeskDirectory(slashResult.deskDir);
+    window.platform?.openFolder?.(slashResult.deskDir);
   }, [slashResult?.deskDir, slashResult?.filePath]);
 
   /**
@@ -2248,12 +2287,6 @@ function InputAreaInner({ surface }: Required<InputAreaProps>) {
         )}
       </div>
       <div className={styles['input-stack']}>
-        {capabilityDrift && !capabilityRefreshing && !visibleSessionConfirmation && !deletedAgentReadOnly && currentSessionPath && (
-          <CapabilityDriftNotice
-            sessionPath={currentSessionPath}
-            drift={capabilityDrift}
-          />
-        )}
         {visibleSessionConfirmation && (
           <SessionConfirmationPrompt
             block={visibleSessionConfirmation}

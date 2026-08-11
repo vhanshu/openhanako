@@ -27,6 +27,7 @@ import { SelectionQuoteActionSurface } from './components/selection/SelectionQuo
 import { MediaViewer } from './components/shared/MediaViewer/MediaViewer';
 import { ToolCallInspector } from './components/chat/ToolCallInspector';
 import { SettingsModalShell } from './components/SettingsModalShell';
+import { FileHistoryModal } from './components/file-history/FileHistoryModal';
 import { initTheme, initDragPrevention } from './bootstrap';
 import { initApp } from './app-init';
 import { openSettingsModal } from './stores/settings-modal-actions';
@@ -152,6 +153,9 @@ function App() {
 
       {/* In-window settings overlay */}
       <SettingsModalShell />
+
+      {/* Workspace file history overlay */}
+      <FileHistoryModal />
 
       {/* Input context menu (cut/copy/paste) */}
       <InputContextMenu />

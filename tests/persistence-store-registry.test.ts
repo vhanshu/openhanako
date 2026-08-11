@@ -11,6 +11,10 @@ import {
   validateRegistry,
 } from "../scripts/scan-persistent-stores.mjs";
 import {
+  LOCAL_PROVIDER_PLUGINS_DIR,
+  LocalProviderPluginStore,
+} from "../core/local-provider-plugin-store.ts";
+import {
   PERSISTENCE_EXEMPTIONS,
   PERSISTENT_STORES,
 } from "../shared/persistence/store-registry.ts";
@@ -155,6 +159,26 @@ describe("persistent store registry", () => {
       "plugin-data/office/jobs",
       "plugin-data/office/generated",
     ]);
+  });
+
+  // The plugin store owns both the directory name and the file shape. The
+  // declaration once spelled a directory the store had stopped using, with a
+  // file shape that never existed, so anything resolving these patterns looked
+  // for locally defined providers and their keys where they could not be. Take
+  // the spelling from the owning module and check it against real paths.
+  it("declares provider plugin paths the local plugin store actually writes", () => {
+    const providerState = PERSISTENT_STORES.find((store) => store.id === "provider-state")!;
+    const pluginPatterns = providerState.pathPatterns.filter((pattern) => (
+      pattern.startsWith(`${LOCAL_PROVIDER_PLUGINS_DIR}/`)
+    ));
+    expect(pluginPatterns.length).toBe(2);
+
+    const home = path.join(path.sep, "fake-home");
+    const store = new LocalProviderPluginStore(home);
+    const written = [store.manifestPath("acme"), store.providerPath("acme")]
+      .map((absolute) => path.relative(home, absolute).split(path.sep).join("/"));
+    const resolved = pluginPatterns.map((pattern) => pattern.replace(/\{storageId\}/g, "acme"));
+    expect(resolved).toEqual(written);
   });
 
   it("rejects duplicate IDs, overlapping paths, and Windows-only case collisions", () => {
@@ -348,5 +372,43 @@ describe("persistent store registry", () => {
     const serialized = JSON.stringify(committed);
     expect(serialized).not.toMatch(/(?:\/Users\/|\/home\/|[A-Za-z]:\\)/);
     expect(committed.discoveredSites.every((site: { sourceFile: string }) => !site.sourceFile.includes("\\"))).toBe(true);
+  });
+
+  it("anchors sites by ordinal so the receipt survives line shifts", () => {
+    // The absolute line number never took part in classification: ruleMatches
+    // keys on sourceFile, kind and the excerpt. Keeping it in the receipt only
+    // meant that inserting a comment anywhere above a write site rewrote the
+    // committed baseline and demanded a schema review that had nothing to
+    // review. The ordinal — the site's position among identical excerpts in
+    // the same file — carries the identity the baseline actually needs.
+    const { inventory } = scanPersistentStores({ rootDir: ROOT, today: TODAY });
+    for (const site of inventory.discoveredSites) {
+      expect(site).not.toHaveProperty("line");
+      expect(Number.isInteger(site.ordinal)).toBe(true);
+      expect(site.ordinal).toBeGreaterThanOrEqual(0);
+    }
+
+    const target = "server/index.ts";
+    const original = fs.readFileSync(path.join(ROOT, target), "utf-8");
+    expect(inventory.discoveredSites.some((site: { sourceFile: string }) => site.sourceFile === target)).toBe(true);
+
+    const shifted = scanPersistentStores({
+      rootDir: ROOT,
+      today: TODAY,
+      sourceOverrides: new Map([[target, `// line shift mutation\n${original}`]]),
+    });
+    expect(shifted.inventory.discoveredSites).toEqual(inventory.discoveredSites);
+  });
+
+  it("still reports a genuinely new write site after the ordinal change", () => {
+    // Desensitizing line numbers must not blunt the guard: adding a real write
+    // call to a scanned file has to stay unregistered-and-loud.
+    const target = "server/index.ts";
+    const original = fs.readFileSync(path.join(ROOT, target), "utf-8");
+    expect(() => scanPersistentStores({
+      rootDir: ROOT,
+      today: TODAY,
+      sourceOverrides: new Map([[target, `${original}\nfs.writeFileSync("/tmp/persistence-drift-probe.json", "{}");\n`]]),
+    })).toThrow(/unregistered persistence site/);
   });
 });

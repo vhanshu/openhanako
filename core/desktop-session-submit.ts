@@ -24,12 +24,14 @@
  * @param {boolean} [opts.preservePromptEnvelope] - prompt text already contains its persisted media/SessionFile/reminder envelope
  * @param {boolean} [opts.projectUserMessage] - persist/emit a visible user projection for this model input
  * @param {() => void} [opts.beforeInputSideEffects] - synchronous commit hook after cache/model preflight, before UI or prompt persistence
+ * @param {() => void} [opts.onInputAccepted] - synchronous receipt after full prompt preflight and input side effects
  * @returns {Promise<{ text: string | null, toolMedia: string[] }>}
  */
 import path from "path";
 import { extOfName, inferFileKind } from "../lib/file-metadata.ts";
 import { collectMediaItems } from "../lib/tools/media-details.ts";
 import { formatSettingsUpdateText } from "../lib/tools/settings-update-result.ts";
+import { createVisibleTextAccumulator } from "../lib/bridge/visible-text-accumulator.ts";
 import { materializeBridgeInboundFiles } from "../lib/session-files/bridge-inbound-files.ts";
 import { serializeSessionFile } from "../lib/session-files/session-file-response.ts";
 import { BrowserManager } from "../lib/browser/browser-manager.ts";
@@ -190,6 +192,7 @@ export async function submitDesktopSessionMessage(engine: any, opts: {
   preservePromptEnvelope?: boolean;
   projectUserMessage?: boolean;
   beforeInputSideEffects?: () => unknown;
+  onInputAccepted?: () => unknown;
 } = {}) {
   const {
     sessionId: requestedSessionId,
@@ -211,6 +214,7 @@ export async function submitDesktopSessionMessage(engine: any, opts: {
     preservePromptEnvelope = false,
     projectUserMessage = true,
     beforeInputSideEffects,
+    onInputAccepted,
   } = opts;
 
   if (!engine || typeof engine.ensureSessionLoaded !== "function" || typeof engine.promptSession !== "function") {
@@ -358,26 +362,31 @@ export async function submitDesktopSessionMessage(engine: any, opts: {
       }
     };
 
-    let captured = "";
+    const visibleText = createVisibleTextAccumulator();
     const toolMedia = [];
     const unsub = session.subscribe?.((event) => {
       if (event.type === "message_update") {
         const sub = event.assistantMessageEvent;
         if (sub?.type === "text_delta") {
-          const delta = sub.delta || "";
-          captured += delta;
-          try { onDelta?.(delta, captured); } catch {}
+          const { emittedDelta, text } = visibleText.appendTextDelta(sub.delta || "");
+          try { onDelta?.(emittedDelta, text); } catch {}
         }
+      } else if (event.type === "tool_execution_start") {
+        visibleText.markHiddenToolBoundary();
       } else if (event.type === "tool_execution_end" && !event.isError) {
         toolMedia.push(...collectMediaItems(event.result?.details?.media));
+        let appendedDetail = false;
         const card = event.result?.details?.card;
         if (card?.description) {
-          captured += (captured ? "\n\n" : "") + card.description;
+          visibleText.appendVisibleDetail(card.description);
+          appendedDetail = true;
         }
         const settingsUpdateText = formatSettingsUpdateText(event.result?.details?.settingsUpdate);
         if (settingsUpdateText) {
-          captured += (captured ? "\n\n" : "") + settingsUpdateText;
+          visibleText.appendVisibleDetail(settingsUpdateText);
+          appendedDetail = true;
         }
+        if (!appendedDetail) visibleText.markHiddenToolBoundary();
       }
     });
 
@@ -392,7 +401,10 @@ export async function submitDesktopSessionMessage(engine: any, opts: {
         context,
       });
       if (typeof engine.preflightSessionInput === "function") {
-        await engine.promptSession(sessionPath, promptText, promptOpts, { afterCachePreflight });
+        await engine.promptSession(sessionPath, promptText, promptOpts, {
+          afterCachePreflight,
+          afterInputAccepted: onInputAccepted,
+        });
       } else {
         // Compatibility for older embedders. HanaEngine always takes the guarded path above.
         afterCachePreflight();
@@ -407,12 +419,56 @@ export async function submitDesktopSessionMessage(engine: any, opts: {
     }
 
     return {
-      text: captured.trim() || null,
+      text: visibleText.getText().trim() || null,
       toolMedia,
     };
   } finally {
     pendingDesktopSessionSubmissions.delete(submissionKey);
   }
+}
+
+/**
+ * Start a desktop turn and expose the point where the prompt has passed Pi's
+ * complete preflight, its visible input side effects are committed, and the
+ * agent run is starting. The full turn remains available separately.
+ */
+export function submitDesktopSessionMessageWithReceipt(
+  engine: any,
+  opts: Parameters<typeof submitDesktopSessionMessage>[1] = {},
+) {
+  let settled = false;
+  let resolveAccepted!: (value: { accepted: true; sessionId: string | null; sessionPath: string }) => void;
+  let rejectAccepted!: (reason: unknown) => void;
+  const accepted = new Promise<{ accepted: true; sessionId: string | null; sessionPath: string }>((resolve, reject) => {
+    resolveAccepted = resolve;
+    rejectAccepted = reject;
+  });
+  const previousAcceptedHook = opts.onInputAccepted;
+  const accept = () => {
+    const hookResult = previousAcceptedHook?.();
+    if (hookResult && typeof (hookResult as any).then === "function") {
+      throw new TypeError("desktop-session-submit: onInputAccepted must be synchronous");
+    }
+    if (settled) return;
+    settled = true;
+    const target = resolveDesktopSessionTarget(engine, opts.sessionId, opts.sessionPath);
+    resolveAccepted({ accepted: true, sessionId: target.sessionId, sessionPath: target.sessionPath });
+  };
+
+  const completion = submitDesktopSessionMessage(engine, { ...opts, onInputAccepted: accept });
+  completion.then(
+    () => {
+      // Older embedders cannot expose the guarded boundary. Completion is the
+      // earliest trustworthy receipt for those compatibility implementations.
+      accept();
+    },
+    (error) => {
+      if (settled) return;
+      settled = true;
+      rejectAccepted(error);
+    },
+  );
+  return { accepted, completion };
 }
 
 export async function submitDesktopSessionInterjection(engine: any, opts: {

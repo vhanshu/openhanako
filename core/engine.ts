@@ -20,6 +20,7 @@ import { migrateToProvidersYaml } from "./migrate-providers.ts";
 import { migrateProviderMediaConfig } from "./provider-media-config.ts";
 import { runMigrations } from "./migrations.ts";
 import { healCredentialFileModes } from "./credential-file-healer.ts";
+import { PLUGIN_DATA_DIRNAME } from "./plugin-config.ts";
 import { pruneStaleCredentialBackups } from "./credential-backup-retention.ts";
 import { createServerRuntimeContext } from "./server-runtime-context.ts";
 import { StudioCronService } from "./studio-cron-service.ts";
@@ -57,6 +58,7 @@ import { loadLocale } from "../lib/i18n.ts";
 import { createApprovalGateway, createModelApprovalReviewer } from "../lib/approval-gateway.ts";
 import { callText } from "./llm-client.ts";
 import { SESSION_APPROVAL_POLICIES } from "./session-permission-mode.ts";
+import { readCompiledResetAt } from "../lib/memory/compiled-memory-state.ts";
 
 /** 已知的外部 AI 工具技能目录（相对 $HOME） */
 export const WELL_KNOWN_SKILL_PATHS = [
@@ -128,6 +130,7 @@ import { createSandboxResourceIO } from "../lib/resource-io/sandbox-resource-io.
 import { ResourceEventBus } from "../lib/resource-io/resource-event-bus.ts";
 import { resourceKeyForRef } from "../lib/resource-io/resource-refs.ts";
 import { ResourceWatchRegistry } from "../lib/resource-io/resource-watch-registry.ts";
+import { FileHistoryService } from "../lib/file-history/file-history-service.ts";
 import { externalReadPathsFromSessionFiles } from "../lib/sandbox/win32-policy.ts";
 import { Win32LegacySandboxCleanupQueue } from "../lib/sandbox/win32-legacy-migration.ts";
 import { t } from "../lib/i18n.ts";
@@ -262,6 +265,7 @@ export class HanaEngine {
   declare _bridge: any;
   declare _channels: any;
   declare _checkpointStore: any;
+  declare _fileHistory: any;
   declare _computerHost: any;
   declare _computerProviders: any;
   declare _configCoord: any;
@@ -371,6 +375,10 @@ export class HanaEngine {
       eventBus: this._resourceEvents(),
       resolveWatchTarget: (resource) => this.getResourceIO().resolveWatchTarget(resource),
     });
+    this._fileHistory = new FileHistoryService({
+      historyRoot: path.join(hanakoHome, "file-history"),
+      log: (message) => console.warn(`[file-history] ${message}`),
+    });
     this._sessionManifestStoreRecovery = null;
     this._sessionManifestStore = this._openSessionManifestStore();
     this._sessionManifestResolver = this._sessionManifestStore
@@ -421,7 +429,7 @@ export class HanaEngine {
     // The data directory keeps the historical `plugin-data/mcp` location: it is
     // where existing installs already store their connector config.
     this._mcp = new McpManager({
-      dataDir: path.join(this.hanakoHome, "plugin-data", "mcp"),
+      dataDir: path.join(this.hanakoHome, PLUGIN_DATA_DIRNAME, "mcp"),
       log: mcpLog,
     }, {
       // A connector tool may come back asking the user a question. The store is
@@ -598,7 +606,6 @@ export class HanaEngine {
       getModels: () => this._models,
       getPrefs: () => this._prefs,
       getSkills: () => this._skills,
-      getSession: () => this._sessionCoord.session,
       getSessionCoordinator: () => this._sessionCoord,
       getHub: () => this._hubCallbacks,
       emitEvent: (e, sp) => this._emitEvent(e, sp),
@@ -730,7 +737,7 @@ export class HanaEngine {
     this._videoStripNotified = new Set();
 
     // UI context（用户当前视野）：sessionPath → { currentViewed, activeFile,
-    // activePreview, pinnedFiles }。由前端每次发 prompt 时带过来，经 server/routes/chat.js
+    // activePreview, pinnedFiles }。由前端每次发 prompt 时带过来，经 server/routes/chat.ts
     // 写入；current_status 工具按需读取 ui_context 来解析“这个 / 当前打开的”等指代。
     this._uiContextBySession = new Map();
 
@@ -1002,7 +1009,10 @@ export class HanaEngine {
   _resourceEvents() {
     if (!this._resourceEventBus) {
       this._resourceEventBus = new ResourceEventBus({
-        emit: (event, sessionPath) => this._emitEvent(event, sessionPath),
+        emit: (event, sessionPath) => {
+          this._emitEvent(event, sessionPath);
+          this._fileHistory?.handleResourceEvent(event);
+        },
       });
     }
     return this._resourceEventBus;
@@ -1423,6 +1433,26 @@ export class HanaEngine {
     }
   }
 
+  getLossyLocalCompactionSummarySource(sessionPath) {
+    const sessionId = this.getSessionIdForPath(sessionPath);
+    if (!sessionId) {
+      throw new Error("Instant local compaction could not resolve the session identity");
+    }
+    const ownership = this.resolveSessionOwnership({ sessionId, sessionPath });
+    const agent = ownership?.agentId ? this._agentMgr.getAgent(ownership.agentId) : null;
+    if (!agent?.summaryManager) {
+      throw new Error("Instant local compaction could not resolve the session's summary owner");
+    }
+    const record = agent.summaryManager.getSummary(sessionId);
+    return {
+      summary: record?.summary || "",
+      cursor: record?.cursor || null,
+      createdAt: record?.created_at || null,
+      updatedAt: record?.updated_at || null,
+      resetAt: readCompiledResetAt(path.dirname(agent.summariesDir)),
+    };
+  }
+
   _openSessionManifestStore() {
     const dbPath = path.join(this.hanakoHome, "session-manifest.db");
     try {
@@ -1646,14 +1676,9 @@ export class HanaEngine {
   /** 确保桌面 session 已加载进 cache 但不改 UI 焦点（Phase 2-C：/rc 接管态用） */
   async ensureSessionLoaded(p) { return this._sessionCoord.ensureSessionLoaded(p); }
   async reloadSessionRuntime(p, opts = {}) { return this._sessionCoord.reloadSessionRuntime(p, opts); }
-  /** #1624：当前应展示的"工具能力有更新"提示（无漂移 / 已 dismiss → null） */
-  getSessionCapabilityDriftNotice(p) { return this._sessionCoord.getSessionCapabilityDriftNotice(p); }
   getSessionModelAvailability(p = this.currentSessionPath) {
     return this._sessionCoord.getSessionModelAvailability(p);
   }
-  markCapabilitySnapshotsStale(opts = {}) { return this._sessionCoord.markCapabilitySnapshotsStale(opts); }
-  /** #1624：记录当前 fingerprint 已被用户关闭，持久化到 session-meta */
-  async dismissSessionCapabilityDrift(p, fingerprint) { return this._sessionCoord.dismissSessionCapabilityDrift(p, fingerprint); }
   isSessionStreaming(p) { return this._sessionCoord.isSessionStreaming(p); }
   isSessionSwitching(p) { return this._sessionCoord.isSessionSwitching(p); }
   async abortSessionByPath(p, options) { return this._sessionCoord.abortSessionByPath(p, options); }
@@ -1953,6 +1978,22 @@ export class HanaEngine {
   }
   getFileBackup() { return this._prefs.getFileBackup(); }
   setFileBackup(p) { this._prefs.setFileBackup(p); }
+  getFileHistoryService() { return this._fileHistory; }
+  refreshFileHistoryWorkspaces() {
+    try {
+      const agents = this._agentMgr?.listAgents?.() || [];
+      const roots = [];
+      for (const agent of agents) {
+        const agentId = agent?.id || agent?.agentId;
+        if (!agentId) continue;
+        const root = this.getExplicitHomeCwd?.(agentId) || this.getHomeCwd?.(agentId);
+        if (root) roots.push(root);
+      }
+      void this._fileHistory.syncWorkspaces(roots);
+    } catch (err) {
+      console.warn(`[file-history] workspace sync failed: ${err.message}`);
+    }
+  }
   listCheckpoints() { return this._checkpointStore.list(); }
   restoreCheckpoint(id) { return this._checkpointStore.restore(id); }
   removeCheckpoint(id) { return this._checkpointStore.remove(id); }
@@ -2025,9 +2066,8 @@ export class HanaEngine {
   setAutoCheckUpdates(v) { this._prefs.setAutoCheckUpdates(v); }
   getKeepAwake() { return this._prefs.getKeepAwake(); }
   setKeepAwake(v) { this._prefs.setKeepAwake(v); }
-  setMemoryEnabled(v) { return this._configCoord.setMemoryEnabled(v); }
   setMemoryMasterEnabled(id, v) { return this._configCoord.setMemoryMasterEnabled(id, v); }
-  persistSessionMeta() { return this._configCoord.persistSessionMeta(); }
+  persistSessionMeta(sessionPath) { return this._configCoord.persistSessionMeta(sessionPath); }
   get permissionMode() { return this._sessionCoord.getPermissionMode(); }
   getSessionPermissionMode(sessionPath) { return this._sessionCoord.getPermissionMode(sessionPath); }
   setSessionPermissionMode(mode) { return this._sessionCoord.setPermissionMode(mode); }
@@ -2307,7 +2347,7 @@ export class HanaEngine {
   _resolveExecutionModel(r) { return this._models.resolveExecutionModel(r); }
   _resolveProviderCredentials(p) { return this._models.resolveProviderCredentials(p); }
   resolveProviderCredentials(p) { return this._resolveProviderCredentials(p); }
-  resolveProviderCredentialsFresh(p) { return this._models.resolveProviderCredentialsFresh(p); }
+  resolveProviderCredentialsFresh(p, options) { return this._models.resolveProviderCredentialsFresh(p, options); }
   resolveModelWithCredentials(ref) { return this._models.resolveModelWithCredentials(ref); }
   resolveModelWithCredentialsFresh(ref) { return this._models.resolveModelWithCredentialsFresh(ref); }
   async refreshAvailableModels() { return this._models.refreshAvailable(); }
@@ -2459,7 +2499,7 @@ export class HanaEngine {
     this._skills = new SkillManager({ skillsDir, externalPaths });
     this._coreExtensionFactories = [
       /**
-       * Provider payload 兼容化（chat 路径）。与 callText 共享 core/provider-compat.js，
+       * Provider payload 兼容化（chat 路径）。与 callText 共享 core/provider-compat.ts，
        * 是两条调用路径唯一的 normalize 入口——末端只在"流式 vs 非流式 fetch"分叉。
        *
        * ctx.model 是 Pi SDK 标准入参，正常 chat session 都会带；少数 edge case
@@ -2608,6 +2648,9 @@ export class HanaEngine {
     // 9. 清理过期的 .ephemeral session 文件（>7 天）
     this._cleanEphemeralSessions();
 
+    // 10. 文件历史：按各 agent 的工作区根目录建立/同步快照 watcher
+    this.refreshFileHistoryWorkspaces();
+
     const totalTime = ((Date.now() - startupTimer) / 1000).toFixed(1);
     log(`✿ 初始化完成（${totalTime}s）`);
   }
@@ -2684,7 +2727,7 @@ export class HanaEngine {
     const devPluginsDir = path.join(this.hanakoHome, "plugins-dev");
     const pluginDevRunsDir = path.join(this.hanakoHome, "plugin-dev-runs");
     const pluginDevSourcesDir = path.join(this.hanakoHome, "plugin-dev-sources");
-    const pluginDataDir = path.join(this.hanakoHome, "plugin-data");
+    const pluginDataDir = path.join(this.hanakoHome, PLUGIN_DATA_DIRNAME);
     fs.mkdirSync(pluginDevSourcesDir, { recursive: true });
 
     // Read app version for plugin compatibility check
@@ -2793,7 +2836,6 @@ export class HanaEngine {
   async syncPluginExtensions() {
     this._syncExtensionFactories();
     await this._reloadResourceLoaderForExtensionFactories();
-    this._sessionCoord?.markCapabilitySnapshotsStale?.({ reason: "plugin.lifecycle.changed" });
   }
 
   // ════════════════════════════
@@ -3254,7 +3296,7 @@ export class HanaEngine {
     }
 
     // Startup assertion: every built-in tool must be categorized in
-    // shared/tool-categories.js. All session-creation paths route through
+    // shared/tool-categories.ts. All session-creation paths route through
     // this function, so a single check here catches the whole surface.
     assertAllBuiltInToolsPermissionCovered([
       ...result.tools,

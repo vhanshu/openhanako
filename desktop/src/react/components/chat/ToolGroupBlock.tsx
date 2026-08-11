@@ -10,6 +10,9 @@ import { extractToolDetail } from '../../utils/message-parser';
 import type { ToolDetail } from '../../utils/message-parser';
 import { openInternalLink } from '../../utils/link-open';
 import { isToolCallHiddenFromProcessUi } from '../../utils/tool-call-visibility';
+import { getToolLabel, phaseForStatus, sessionToolTargetName, sessionToolTargetPath } from '../../utils/tool-label';
+import { useStore } from '../../stores';
+import { switchSession } from '../../stores/session-actions';
 import { LinkContextMenu, type LinkContextMenuState } from '../shared/LinkContextMenu';
 
 import type { ToolCall } from '../../stores/chat-types';
@@ -24,6 +27,7 @@ interface Props {
   sessionPath?: string;
 }
 
+export const ToolGroupBlock = memo(function ToolGroupBlock({ tools: rawTools, collapsed: initialCollapsed, agentName = 'Hanako' }: Props) {
 function getToolLabel(name: string, phase: string, agentName: string): string {
   const t = window.t;
   const vars = { name: agentName };
@@ -130,10 +134,18 @@ const ToolIndicator = memo(function ToolIndicator({ tool, agentName }: { tool: T
   const openToolInspector = useStore(s => s.openToolInspector);
   const currentSessionPath = useStore(s => s.currentSessionPath);
 
-  const detail = extractToolDetail(tool.name, tool.args);
-  const label = getToolLabel(tool.name, tool.done ? 'done' : 'running', agentName);
+  // session 工具指向另一个会话，把它的名字显示出来并支持点过去。两个 selector 各返回
+  // 字符串或 null，引用稳定，不会让每个工具行都因为 sessions 变动而重渲染。
+  const isSessionTool = tool.name === 'session';
+  const sessionTargetName = useStore(s => (isSessionTool ? sessionToolTargetName(s, tool.args) : null));
+  const sessionTargetPath = useStore(s => (isSessionTool ? sessionToolTargetPath(s, tool.args) : null));
+
+  const rawDetail = extractToolDetail(tool.name, tool.args);
+  const detail = sessionTargetName ? { ...rawDetail, text: sessionTargetName } : rawDetail;
   const detailTitle = detail.title || detail.href;
   const status = tool.status || (tool.done ? (tool.success ? 'succeeded' : 'failed') : 'running');
+  // 失败的工具要说失败：此前这里只传 done/running，失败的读文件会显示"翻完了 ✗"
+  const label = getToolLabel(tool.name, phaseForStatus(status), agentName, tool.args);
 
   // 如果 args 里有 tag 类型信息（如 agent 名）
   const tag = tool.args?.agentId as string | undefined;
@@ -167,7 +179,19 @@ const ToolIndicator = memo(function ToolIndicator({ tool, agentName }: { tool: T
       >
         <span className={styles.toolDesc}>{label}</span>
         {detail.text && (
-          detail.href ? (
+          sessionTargetPath ? (
+            <span
+              className={`${styles.toolDetail} ${styles.toolDetailLink}`}
+              title={detailTitle || detail.text}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                void switchSession(sessionTargetPath);
+              }}
+            >
+              {detail.text}
+            </span>
+          ) : detail.href ? (
             <span
               className={`${styles.toolDetail} ${styles.toolDetailLink}`}
               title={detailTitle}
