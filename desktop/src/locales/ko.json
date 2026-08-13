@@ -851,6 +851,27 @@
       "done": "🔧 {name} 끝났어요",
       "failed": "🔧 {name} 뭔가 잘 안 됐어요"
     },
+    "inspector": {
+      "eyebrow": "도구 호출",
+      "ariaLabel": "도구 호출 세부정보: {name}",
+      "close": "닫기",
+      "status": "상태",
+      "id": "호출 ID",
+      "session": "세션",
+      "error": "오류",
+      "args": "인자",
+      "details": "메타데이터",
+      "result": "실행 결과",
+      "resultLoading": "결과를 불러오는 중…",
+      "resultUnavailable": "결과가 없습니다.",
+      "resultTooLarge": "결과가 큽니다({total} bytes). 인라인 미리보기 한도({limit} bytes)를 초과했습니다. .txt로 다운로드하여 전체 내용을 확인하세요.",
+      "downloadAsTxt": ".txt로 다운로드",
+      "resultTruncated": "결과가 잘려서 표시됩니다({shown} / {total} bytes)",
+      "empty": "(없음)",
+      "copy": "복사",
+      "copied": "복사됨",
+      "openPathTitle": "클릭하여 기본 앱으로 열기: {path}"
+    },
     "checkDeferred": {
       "storeNotInitialized": "지연 작업 저장소가 초기화되지 않았어요.",
       "noActiveSession": "활성 세션이 없어요.",
@@ -2669,6 +2690,8 @@
     "copy": "복사",
     "paste": "붙여넣기",
     "selectAll": "모두 선택",
+    "foldSelection": "선택 영역 접기",
+    "unfoldSelection": "선택 영역 펴기",
     "undo": "실행 취소",
     "redo": "다시 실행",
     "bold": "굵게",
@@ -2742,7 +2765,8 @@
       "status": {
         "available": "사용 가능",
         "expired": "만료됨"
-      }
+      },
+      "expiredTooltip": "파일이 만료되었어요"
     },
     "jian": {
       "collapse": "Jian 접기",

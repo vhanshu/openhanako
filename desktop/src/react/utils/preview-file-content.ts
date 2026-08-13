@@ -1,16 +1,112 @@
 import type { PreviewItem } from '../types';
 
 export const PREVIEWABLE_EXTS: Record<string, string> = {
-  html: 'html', htm: 'html',
+  // 专用预览器
+  html: 'html', htm: 'html', xhtml: 'html',
   md: 'markdown', markdown: 'markdown',
-  js: 'code', ts: 'code', jsx: 'code', tsx: 'code',
-  py: 'code', css: 'code', json: 'code', yaml: 'code', yml: 'code',
-  xml: 'code', sql: 'code', sh: 'code', bash: 'code',
-  txt: 'code',
-  c: 'code', cpp: 'code', h: 'code', java: 'code',
-  rs: 'code', go: 'code', rb: 'code', php: 'code',
-  csv: 'csv', pdf: 'pdf',
+  csv: 'csv', tsv: 'csv',
+  pdf: 'pdf',
   docx: 'docx', xlsx: 'xlsx', xls: 'xlsx',
+
+  // ── code 预览：一切纯文本文件走这里 ──
+  // PreviewEditor 用 @codemirror/language-data 自动找语言定义；找到就有高亮，
+  // 找不到就当 txt 纯文本展示（折叠/行号/查找照常工作）。
+  // 这里登记的只是“知道是文本可以打开”的 ext；具体能不能高亮是 CodeMirror 的事。
+
+  // JS / TS 全家桶
+  js: 'code', mjs: 'code', cjs: 'code', jsx: 'code',
+  ts: 'code', mts: 'code', cts: 'code', tsx: 'code',
+
+  // Web 前端
+  vue: 'code', svelte: 'code', astro: 'code',
+  css: 'code', scss: 'code', sass: 'code', less: 'code',
+  styl: 'code', stylus: 'code',
+
+  // 模板
+  hbs: 'code', handlebars: 'code', pug: 'code', jade: 'code',
+  ejs: 'code', erb: 'code', liquid: 'code',
+  j2: 'code', jinja: 'code', jinja2: 'code',
+
+  // 数据 / 序列化
+  json: 'code', json5: 'code', jsonld: 'code', map: 'code',
+  geojson: 'code', topojson: 'code', ndjson: 'code',
+  yaml: 'code', yml: 'code', toml: 'code',
+  xml: 'code', xsl: 'code', xsd: 'code', rss: 'code', wsdl: 'code',
+
+  // Shell
+  sh: 'code', bash: 'code', zsh: 'code', ksh: 'code', fish: 'code',
+  ps1: 'code', psd1: 'code', psm1: 'code',
+  bat: 'code', cmd: 'code',
+
+  // C/C++/系统
+  c: 'code', h: 'code', ino: 'code',
+  cpp: 'code', cc: 'code', cxx: 'code', hpp: 'code', hxx: 'code', hh: 'code',
+
+  // JVM
+  java: 'code', cs: 'code', csharp: 'code',
+  kt: 'code', kts: 'code', scala: 'code',
+  groovy: 'code', gradle: 'code',
+  clj: 'code', cljc: 'code', cljx: 'code', cljs: 'code',
+
+  // 脚本 / 动态
+  py: 'code', pyw: 'code', rb: 'code', rake: 'code', rbx: 'code',
+  pl: 'code', pm: 'code', perl: 'code',
+  php: 'code', lua: 'code', tcl: 'code', vim: 'code',
+  r: 'code', cr: 'code', crystal: 'code', dart: 'code',
+
+  // 函数式 / 老
+  hs: 'code', haskell: 'code',
+  ml: 'code', mli: 'code', mll: 'code', mly: 'code', ocaml: 'code',
+  fs: 'code', fsharp: 'code',
+  ex: 'code', exs: 'code', erl: 'code', hrl: 'code', erlang: 'code',
+  elm: 'code', cob: 'code', cobol: 'code', cpy: 'code',
+  pas: 'code', pascal: 'code', pp: 'code',
+  scm: 'code', ss: 'code', scheme: 'code',
+  lisp: 'code', cl: 'code', el: 'code',
+  edn: 'code', factor: 'code', sml: 'code', sig: 'code', fun: 'code',
+  livescript: 'code', ls: 'code',
+  coffee: 'code', coffeescript: 'code',
+  forth: 'code', fth: 'code', '4th': 'code',
+
+  // 现代 / 系统
+  go: 'code', rs: 'code', rust: 'code',
+  swift: 'code', m: 'code', mm: 'code',
+  d: 'code', dylan: 'code', dyl: 'code', intr: 'code',
+  haxe: 'code', hx: 'code',
+
+  // 硬件描述
+  v: 'code', verilog: 'code', sv: 'code', svh: 'code', systemverilog: 'code',
+  vhd: 'code', vhdl: 'code',
+
+  // 数据库 / 查询
+  sql: 'code', cql: 'code', cypher: 'code', cyph: 'code',
+  sparql: 'code', rq: 'code',
+  protobuf: 'code', proto: 'code', gql: 'code', graphql: 'code',
+
+  // 构建 / 部署
+  dockerfile: 'code', docker: 'code',
+  cmake: 'code', nginx: 'code',
+  puppet: 'code',
+
+  // 配置 / 纯文本
+  properties: 'code', ini: 'code', in: 'code', cfg: 'code', conf: 'code',
+  htaccess: 'code',
+  log: 'code', txt: 'code',
+  env: 'code',
+  gitignore: 'code', gitattributes: 'code', dockerignore: 'code',
+  editorconfig: 'code', npmrc: 'code', babelrc: 'code', prettierrc: 'code', eslintrc: 'code',
+
+  // 字处理 / 排版
+  bib: 'code', tex: 'code', dtx: 'code',
+  wast: 'code', wat: 'code', webassembly: 'code',
+
+  // 其他 CM 已注册 / 常见纯文本
+  diff: 'code', patch: 'code',
+  http: 'code', hxml: 'code',
+  jl: 'code', julia: 'code',
+
+  // 老 / 其他
+  asm: 'code', s: 'code',
 };
 
 export const BINARY_PREVIEW_TYPES = new Set(['pdf']);

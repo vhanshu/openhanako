@@ -851,6 +851,27 @@
       "done": "🔧 {name} 終わった",
       "failed": "🔧 {name} うまくいかなかった"
     },
+    "inspector": {
+      "eyebrow": "ツール呼び出し",
+      "ariaLabel": "ツール呼び出しの詳細：{name}",
+      "close": "閉じる",
+      "status": "ステータス",
+      "id": "呼び出し ID",
+      "session": "セッション",
+      "error": "エラー",
+      "args": "引数",
+      "details": "メタデータ",
+      "result": "実行結果",
+      "resultLoading": "結果を読み込み中…",
+      "resultUnavailable": "結果はありません。",
+      "resultTooLarge": "結果が大きい（{total} bytes）、インラインプレビュー上限（{limit} bytes）を超えています。.txt でダウンロードして完全な内容を確認してください。",
+      "downloadAsTxt": ".txt としてダウンロード",
+      "resultTruncated": "結果は切り詰めて表示されています（{shown} / {total} bytes）",
+      "empty": "（なし）",
+      "copy": "コピー",
+      "copied": "コピーしました",
+      "openPathTitle": "クリックして既定アプリで開く：{path}"
+    },
     "checkDeferred": {
       "storeNotInitialized": "遅延タスクストアが初期化されていません。",
       "noActiveSession": "アクティブなセッションがありません。",
@@ -2669,6 +2690,8 @@
     "copy": "コピー",
     "paste": "貼り付け",
     "selectAll": "すべて選択",
+    "foldSelection": "選択範囲を折りたたむ",
+    "unfoldSelection": "選択範囲を展開",
     "undo": "元に戻す",
     "redo": "やり直す",
     "bold": "太字",
@@ -2742,7 +2765,8 @@
       "status": {
         "available": "利用可能",
         "expired": "期限切れ"
-      }
+      },
+      "expiredTooltip": "ファイルの有効期限が切れました"
     },
     "jian": {
       "collapse": "Jian をたたむ",

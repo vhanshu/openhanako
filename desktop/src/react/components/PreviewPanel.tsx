@@ -155,6 +155,10 @@ export function PreviewPanel() {
   // html 文件专属：edit 模式 = code 编辑器（与 html kind 一致：code mode + html 语言）；render 模式 = iframe
   const isHtmlFile = !!previewItem && previewItem.type === 'html' && previewItem.status !== 'missing' && previewItem.status !== 'expired';
   const htmlEditMode = isHtmlFile && (htmlEditModes[previewItem.id] ?? false);
+  // .html 默认预览模式内容在 <iframe> 里，applyFindMarks 走不到 iframe 内部的 document，
+  // 所以这块完全禁掉 find：Cmd+F 不响应、find box 不渲染。切换到编辑模式后 isHtmlFile
+  // + htmlEditMode 走编辑器分支，find 正常开启。
+  const findEnabled = !previewItem || !isHtmlFile || htmlEditMode;
   const htmlZoom = isHtmlFile ? (htmlZoomLevels[previewItem.id] ?? 1) : 1;
   // html 处于 edit 模式时等价为“代码编辑”，因此走编辑器分支；mode/codeTheme、语言 html
   const effectiveEditable = editable || (isHtmlFile && htmlEditMode);
@@ -406,14 +410,15 @@ export function PreviewPanel() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!previewOpen || !(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'f') return;
+      if (!previewOpen || !findEnabled) return;
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'f') return;
       event.preventDefault();
       event.stopPropagation();
       setFindOpen(true);
     };
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [previewOpen]);
+  }, [findEnabled, previewOpen]);
 
   useEffect(() => {
     setFindIndex(0);
@@ -422,11 +427,11 @@ export function PreviewPanel() {
   useEffect(() => {
     clearFindMarks(previewBodyRef.current, 'preview-find-mark');
     previewFindMarksRef.current = [];
-    if (!findOpen || !findQuery || !previewItem) {
+    if (!findOpen || !findQuery || !previewItem || !findEnabled) {
       setFindCount(0);
       return undefined;
     }
-    if (editable) {
+    if (effectiveEditable) {
       const matches = sourceFindMatches(previewItem.content, findQuery);
       setFindCount(matches.length);
       const match = matches[Math.min(findIndex, Math.max(0, matches.length - 1))];
@@ -440,7 +445,7 @@ export function PreviewPanel() {
       clearFindMarks(previewBodyRef.current, 'preview-find-mark');
       previewFindMarksRef.current = [];
     };
-  }, [activeTabId, editable, findIndex, findOpen, findQuery, previewItem]);
+  }, [activeTabId, effectiveEditable, findEnabled, findIndex, findOpen, findQuery, previewItem]);
 
   useEffect(() => {
     const marks = previewFindMarksRef.current;
@@ -484,7 +489,7 @@ export function PreviewPanel() {
             />
           )}
           <ClassicFindBox
-            open={findOpen}
+            open={findOpen && findEnabled}
             query={findQuery}
             resultIndex={Math.min(findIndex, Math.max(0, findCount - 1))}
             resultCount={findCount}

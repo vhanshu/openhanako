@@ -16,12 +16,13 @@
  *   - 重新打开时 result 会重新拉取
  */
 
-import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import { useEffect, useMemo, useState, useCallback, useRef, Fragment } from 'react';
 import { motion } from 'motion/react';
 import { spring } from '@/ui/motion';
 import { useStore } from '../../stores';
 import type { ToolCall } from '../../stores/chat-types';
 import { fetchToolCallResult, downloadToolCallResult, type ToolResultPayload } from '../../utils/tool-result';
+import { parsePatch, hunkStats } from '../../utils/edit-patch';
 import styles from './Chat.module.css';
 
 declare function t(key: string, vars?: Record<string, string | number>): string;
@@ -82,11 +83,111 @@ function statusClass(tool: ToolCall): string {
   return styles.toolInspectorStatusRunning ?? '';
 }
 
+// ── edit 工具的 unified patch 行级着色 ──
+// 解析逻辑在 utils/edit-patch.ts（parsePatch / hunkStats），这里只负责渲染：
+// 每个 hunk 渲成「旧行号 | 新行号 | 内容」三列，hunk header 后追加 +X -Y 统计。
+
+function EditDiffPatch({ patch }: { patch: string }) {
+  // patch 文本按 \n split 后可能多出一个空尾项（以 \n 结尾），过滤掉
+  const rawLines = patch.split('\n');
+  if (rawLines.length > 1 && rawLines[rawLines.length - 1] === '') rawLines.pop();
+  const parsed = parsePatch(rawLines);
+
+  // 空 patch：什么都不渲染（ResultBlock 的 fallback 会兜住）
+  if (parsed.hunks.length === 0 && !parsed.fileHeaders) return null;
+
+  return (
+    <pre className={styles.toolInspectorDiff} data-testid="tool-inspector-diff">
+      {parsed.fileHeaders && (
+        <>
+          <div className={styles.toolInspectorDiffHeader}>
+            <span className={styles.toolInspectorDiffLineNum}>{' '}</span>
+            <span className={styles.toolInspectorDiffLineNum}>{' '}</span>
+            <span className={styles.toolInspectorDiffContent}>
+              {parsed.fileHeaders.oldPath || ' '}
+            </span>
+          </div>
+          {parsed.fileHeaders.oldPath !== parsed.fileHeaders.newPath && (
+            <div className={styles.toolInspectorDiffHeader}>
+              <span className={styles.toolInspectorDiffLineNum}>{' '}</span>
+              <span className={styles.toolInspectorDiffLineNum}>{' '}</span>
+              <span className={styles.toolInspectorDiffContent}>
+                {parsed.fileHeaders.newPath || ' '}
+              </span>
+            </div>
+          )}
+        </>
+      )}
+      {parsed.hunks.map((hunk, hi) => {
+        const stats = hunkStats(hunk);
+        // hunk = [hunkHeader, ...contentLines]；hunk header 自身不计 stats（下面循环跳过第一项）
+        return (
+          <Fragment key={`hunk-${hi}`}>
+            {/* hunk header：行号列留空，后面追加 +/- 统计 */}
+            <div className={styles.toolInspectorDiffHunk}>
+              <span className={styles.toolInspectorDiffLineNum}>{' '}</span>
+              <span className={styles.toolInspectorDiffLineNum}>{' '}</span>
+              <span className={styles.toolInspectorDiffContent}>
+                {hunk[0].text}{' '}
+                <span className={styles.toolInspectorDiffStats}>
+                  +{stats.added} -{stats.removed}
+                </span>
+              </span>
+            </div>
+            {hunk.slice(1).map((line, li) => {
+              const className =
+                line.kind === 'added' ? styles.toolInspectorDiffAdded
+                : line.kind === 'removed' ? styles.toolInspectorDiffRemoved
+                : styles.toolInspectorDiffContext;
+              return (
+                <div key={`h${hi}-l${li}`} className={className}>
+                  <span className={styles.toolInspectorDiffLineNum}>
+                    {line.oldLine ?? ''}
+                  </span>
+                  <span className={styles.toolInspectorDiffLineNum}>
+                    {line.newLine ?? ''}
+                  </span>
+                  <span className={styles.toolInspectorDiffContent}>{line.text || ' '}</span>
+                </div>
+              );
+            })}
+          </Fragment>
+        );
+      })}
+    </pre>
+  );
+}
+
+/**
+ * 把 store 里已存在的 tool.details 折成 ToolResultPayload。
+ *
+ * 动机：tool_end streaming 事件 (server/routes/chat.ts:1294) 已经把 details.patch
+ * 推进 store 的 tool 对象 (hooks/use-stream-buffer.ts:447)。edit 工具跑完后点开
+ * Inspector，不必再走一次 fetchToolCallResult——store 里的 patch 已经是终态。
+ * 拿这块兜底能省一次 HTTP 往返，避免 fetch 期间的 loading 闪烁。
+ *
+ * 非 edit 工具 / patch 不存在 / 工具还在跑（store.details 还没写）→ 返回 loading。
+ */
+function toolDetailsToPayload(tool: ToolCall | undefined): ToolResultPayload {
+  if (!tool) return { status: 'loading' };
+  const storedPatch = typeof tool.details?.patch === 'string' ? tool.details.patch : null;
+  if (tool.name === 'edit' && storedPatch) {
+    return {
+      status: 'available',
+      toolCallId: tool.id,
+      toolName: tool.name,
+      isError: false,
+      details: tool.details,
+    };
+  }
+  return { status: 'loading' };
+}
+
 export function ToolCallInspector() {
   const state = useStore(s => s.toolInspector);
   const closeToolInspector = useStore(s => s.closeToolInspector);
 
-  const [result, setResult] = useState<ToolResultPayload>({ status: 'loading' });
+  const [result, setResult] = useState<ToolResultPayload>(() => toolDetailsToPayload(state?.tool));
 
   const tool: ToolCall | undefined = state?.tool;
   const sessionPath: string | undefined = state?.sessionPath;
@@ -96,12 +197,21 @@ export function ToolCallInspector() {
     && document.documentElement.getAttribute('data-platform') === 'web';
   const canOpenLocalPath = !isWebRuntime && typeof window.platform?.openFile === 'function';
 
+  // 工具切换或 store.details 更新时同步 result：edit 工具 store 里 patch 已有就直接用，
+  // 避免 loading 闪烁；其他情况交给后面的 fetch effect 异步补。
+  useEffect(() => {
+    setResult(toolDetailsToPayload(tool));
+  }, [tool?.id, tool?.details]);
+
   // 重新打开 / 工具变化时拉取结果；tool.id 变化时强制重新拉。
+  // edit 工具 + store 已有 patch 时跳过 fetch（fetch 拿到的跟 store 一样，没必要再绕一圈）。
   useEffect(() => {
     if (!state || !tool) {
       setResult({ status: 'loading' });
       return;
     }
+    const storedPatch = typeof tool.details?.patch === 'string' ? tool.details.patch : null;
+    if (tool.name === 'edit' && storedPatch) return;
     const controller = new AbortController();
     setResult({ status: 'loading' });
     fetchToolCallResult(sessionPath!, tool, { signal: controller.signal })
@@ -243,10 +353,11 @@ export function ToolCallInspector() {
           <section className={styles.toolInspectorSection}>
             <div className={styles.toolInspectorSectionHeader}>
               <h3 className={styles.toolInspectorSectionTitle}>{t('tool.inspector.result')}</h3>
-              <CopyButton text={resultText(result)} disabled={result.status === 'loading' || result.status === 'too_large'} />
+              <CopyButton text={resultText(result, tool.name)} disabled={result.status === 'loading' || result.status === 'too_large'} />
             </div>
             <ResultBlock
               result={result}
+              toolName={tool.name}
               onDownload={() => {
                 if (!sessionPath) return;
                 void downloadToolCallResult(sessionPath, tool).catch((err) => {
@@ -263,9 +374,17 @@ export function ToolCallInspector() {
 
 // ── 结果区段 ──
 
-function ResultBlock({ result, onDownload }: { result: ToolResultPayload; onDownload?: () => void }) {
+function ResultBlock({ result, toolName, onDownload }: { result: ToolResultPayload; toolName: string; onDownload?: () => void }) {
   if (result.status === 'loading') {
     return <p className={styles.toolInspectorEmpty}>{t('tool.inspector.resultLoading')}</p>;
+  }
+  // edit 工具走 diff 渲染：后端 details.patch 是 unified diff 字符串，按行首字符分桶上色。
+  // 失败时（isError=true）后端不会返回 patch，走 fallback 到 text 分支。
+  if (toolName === 'edit' && result.status === 'available') {
+    const patch = typeof result.details?.patch === 'string' ? result.details.patch : null;
+    if (patch) {
+      return <EditDiffPatch patch={patch} />;
+    }
   }
   if (result.status === 'available' && result.text !== undefined) {
     return <pre className={styles.toolInspectorPre}>{result.text}</pre>;
@@ -311,9 +430,16 @@ function shortPath(path: string): string {
   return `…${sep}${parts.slice(-3).join(sep)}`;
 }
 
-/** 把 ToolResultPayload 折成可复制的纯文本。loading / unavailable / too_large 返回空串。 */
-function resultText(result: ToolResultPayload): string {
+/** 把 ToolResultPayload 折成可复制的纯文本。loading / unavailable / too_large 返回空串。
+ *
+ * edit 工具优先返回 unified patch：用户复制后可以直接贴到 PR / issue / git apply，
+ * 拿到的是机器可读的 diff，而不是 "Successfully replaced 3 block(s) in path" 这种一句话。
+ */
+function resultText(result: ToolResultPayload, toolName?: string): string {
   if (result.status === 'available') {
+    if (toolName === 'edit' && typeof result.details?.patch === 'string') {
+      return result.details.patch;
+    }
     if (result.text !== undefined) return result.text;
     if (result.details !== undefined) return formatJson(result.details);
   }

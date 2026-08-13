@@ -64,7 +64,9 @@ export async function openFilePreview(
   },
 ): Promise<void> {
   const fileName = label || filePath.split('/').pop() || filePath;
-  const normalizedExt = ext.replace(/^\./, '').toLowerCase();
+  // ext 可能是 undefined（无扩展名文件从 workbench 路径传过来），
+  // 兜底为 '' 后交给下面的“空 ext”探测分支处理。
+  const normalizedExt = (ext || '').replace(/^\./, '').toLowerCase();
 
   try {
     if (normalizedExt === 'skill') {
@@ -101,6 +103,44 @@ export async function openFilePreview(
         fileId: context?.fileId,
         blockIdx: context?.blockIdx,
       });
+      return;
+    }
+
+    // 无扩展名文件（如 Dockerfile / Makefile / 某个 raw blob）：用 readFileSnapshot 探测
+    // 是否是纯文本。后端 readTextFileSnapshot 内部检测 NUL 字节 + 5MB 大小上限，
+    // 是免费的纯文本探测器。拿到 content 就走 code 预览（language=basename 让
+    // PreviewEditor 能去 @codemirror/language-data 匹配 Dockerfile 等有 filename 的
+    // 语言）；拿不到走 file-info，让“用默认应用打开”接手。
+    if (!normalizedExt) {
+      const snapshot = await window.platform?.readFileSnapshot?.(filePath);
+      if (snapshot?.content != null) {
+        // 只拿最终文件名，去掉任何路径分隔符残余
+        const baseName = (fileName.split(/[\\/]/).pop() || fileName).trim();
+        // 无扩展名（如 Dockerfile / Jenkinsfile / BUCK）传语言名让 PreviewEditor
+        // 去 @codemirror/language-data 匹配；带点的（Dockerfile.local）按 txt 展示
+        const language = baseName && !baseName.includes('.') ? baseName.toLowerCase() : undefined;
+        const previewItem: PreviewItem = {
+          id: `file-${filePath}`,
+          type: 'code',
+          title: fileName,
+          content: snapshot.content,
+          filePath,
+          ext: '',
+          fileVersion: snapshot.version,
+          language,
+        };
+        openPreview(previewItem);
+        return;
+      }
+      const previewItem: PreviewItem = {
+        id: `file-${filePath}`,
+        type: 'file-info',
+        title: fileName,
+        content: '',
+        filePath,
+        ext: '',
+      };
+      openPreview(previewItem);
       return;
     }
 

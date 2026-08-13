@@ -23,6 +23,7 @@ import { EditorState, Compartment, Transaction, EditorSelection } from '@codemir
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import {
   syntaxHighlighting, bracketMatching,
+  foldGutter, foldKeymap,
 } from '@codemirror/language';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
@@ -455,6 +456,7 @@ export const PreviewEditor = forwardRef<PreviewEditorHandle, PreviewEditorProps>
       lang: new Compartment(),
       highlight: new Compartment(),
       gutter: new Compartment(),
+      fold: new Compartment(),
       conceal: new Compartment(),
       theme: new Compartment(),
       wrap: new Compartment(),
@@ -772,7 +774,7 @@ export const PreviewEditor = forwardRef<PreviewEditorHandle, PreviewEditorProps>
         ...(isMd ? [] : [drawSelection()]),
         history(),
         bracketMatching(),
-        keymap.of([...defaultKeymap, ...historyKeymap]),
+        keymap.of([...defaultKeymap, ...historyKeymap, ...foldKeymap]),
         EditorView.contentAttributes.of({ spellcheck: 'false' }),
         // markdown 模式始终启用折行（依赖 max-width 容器随侧栏变窄自动折），
         // code 模式才由 wordWrap toggle 决定是否启用
@@ -840,6 +842,23 @@ export const PreviewEditor = forwardRef<PreviewEditorHandle, PreviewEditorProps>
         }),
         // Dynamic compartments
         c.gutter.of(isMd || isCsv ? [] : lineNumbers()),
+        // fold gutter 紧跟 lineNumbers 之后，视觉上落在「行号列右侧」。
+        // code / markdown 模式启用；csv / text 没有语法树，不挂。
+        // 折叠范围由各 lang 包注册的 foldNodeProp 自动给出（lang-html 折叠
+        // <html>，lang-javascript 折叠 {...}，lang-markdown 折叠标题/围栏）。
+        // code 模式下语言通过 langDef.load() 异步挂载，挂载前 gutter 为空属正常。
+        c.fold.of(
+          (isMd || (!isCsv && mode === 'code'))
+            ? [foldGutter({
+                markerDOM(open) {
+                  // eslint-disable-next-line no-restricted-syntax -- CodeMirror foldGutter 要求返回 HTMLElement，不走 React 渲染
+                  const span = document.createElement('span');
+                  span.textContent = open ? '▾' : '▸';
+                  return span;
+                },
+              })]
+            : [],
+          ),
         c.lang.of(
           isMd ? markdown({ base: markdownLanguage, codeLanguages: languages }) : [],
         ),

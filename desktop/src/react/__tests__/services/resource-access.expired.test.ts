@@ -23,8 +23,9 @@ function makeFileRef(overrides: Partial<FileRef> = {}): FileRef {
 }
 
 const desktopContext = {
-  canUseNativeResourcePath: true,
-  isWebRuntime: false,
+  // 当前 API：context 只带 connection；null = 本地桌面（非远端连接），
+  // canUseNativeResourcePath 返回 true，语义与旧字段 canUseNativeResourcePath: true 一致。
+  connection: null,
 };
 
 describe('resource-access — expired file guards', () => {

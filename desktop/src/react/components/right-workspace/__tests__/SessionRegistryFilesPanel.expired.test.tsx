@@ -8,7 +8,7 @@
  * - 文件名 title 提示过期 tooltip
  */
 import '@testing-library/jest-dom/vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SessionRegistryFilesPanel } from '../SessionRegistryFilesPanel';
@@ -38,6 +38,14 @@ const tMap: Record<string, string> = {
 };
 
 describe('SessionRegistryFilesPanel — expired file presentation', () => {
+  /** 按文件名找文件行（data-file-id 是 buildFileRefId 生成的语义化 id，不是 mock 的 sf_*） */
+  function rowsByFileName(root: HTMLElement): { expired: Element | null; alive: Element | null } {
+    const rows = Array.from(root.querySelectorAll('[data-session-file-row]'));
+    return {
+      expired: rows.find(r => r.textContent?.includes('duplicate_finder.py')) || null,
+      alive: rows.find(r => r.textContent?.includes('小薇.md')) || null,
+    };
+  }
   beforeEach(() => {
     window.t = ((key: string) => tMap[key] || key) as typeof window.t;
     window.platform = {
@@ -58,7 +66,13 @@ describe('SessionRegistryFilesPanel — expired file presentation', () => {
       deskWorkspaceMountId: null,
       deskWorkspaceNativeRoot: null,
       studioWorkspaces: [],
-      activeServerConnection: { studioId: 'default' },
+      activeServerConnection: {
+        studioId: 'default',
+        // local-owner 连接：canUseNativeResourcePath 依赖 kind/credentialKind
+        kind: 'local',
+        credentialKind: 'loopback_token',
+        baseUrl: 'http://127.0.0.1:3210',
+      },
       sessionRegistryFilesByPath: {
         '/sessions/main.jsonl': [
           {
@@ -66,7 +80,8 @@ describe('SessionRegistryFilesPanel — expired file presentation', () => {
             fileId: 'sf_expired',
             kind: 'file',
             name: 'duplicate_finder.py',
-            path: '/Users/x/OH-WorkSpace/duplicate_finder.py',
+            // SessionRegistryFile 的路径字段是 filePath，不是 path
+            filePath: '/Users/x/OH-WorkSpace/duplicate_finder.py',
             ext: 'py',
             status: 'expired',
             missingAt: 1234,
@@ -77,9 +92,19 @@ describe('SessionRegistryFilesPanel — expired file presentation', () => {
             fileId: 'sf_alive',
             kind: 'file',
             name: '小薇.md',
-            path: '/Users/x/OH-WorkSpace/小薇.md',
+            filePath: '/Users/x/OH-WorkSpace/小薇.md',
             ext: 'md',
             sessionPath: '/sessions/main.jsonl',
+            // 带 resource content link：fileRefDownloadUrl 走远端 URL（本地文件无 resource 时返回 null，下载按钮不渲染）
+            resource: {
+              schemaVersion: 1,
+              resourceId: 'res_sf_alive',
+              name: '小薇.md',
+              studioId: 'default',
+              type: 'file',
+              source: 'session_file',
+              links: { self: '/api/resources/res_sf_alive', content: '/api/resources/res_sf_alive/content' },
+            },
           },
         ],
       },
@@ -94,25 +119,24 @@ describe('SessionRegistryFilesPanel — expired file presentation', () => {
   it('marks expired row with data-expired and shows status label + warning badge icon', () => {
     const { container: root } = render(<SessionRegistryFilesPanel />);
 
-    const expiredRow = root.querySelector('[data-file-id="sf_expired"]');
+    const expiredRow = rowsByFileName(root).expired;
     expect(expiredRow).not.toBeNull();
     expect(expiredRow?.getAttribute('data-expired')).toBe('true');
     // 三角警告 badge：在 expired row 的 fileIcon 下渲染
-    expect(root.querySelector('[data-file-id="sf_expired"] .fileIconExpiredBadge, [data-file-id="sf_expired"] [class*="fileIconExpiredBadge"]'))
+    expect(expiredRow?.querySelector('[class*="fileIconExpiredBadge"]'))
       .not.toBeNull();
     // status meta 显示"已过期"
     expect(screen.getByText('已过期')).toBeInTheDocument();
     // 正常文件没有 badge
-    const aliveRow = root.querySelector('[data-file-id="sf_alive"]');
+    const aliveRow = rowsByFileName(root).alive;
     expect(aliveRow?.getAttribute('data-expired')).toBe('false');
-    expect(root.querySelector('[data-file-id="sf_alive"] [class*="fileIconExpiredBadge"]'))
-      .toBeNull();
+    expect(aliveRow?.querySelector('[class*="fileIconExpiredBadge"]')).toBeNull();
   });
 
   it('disables preview/open/reveal/download actions on expired row; copy path stays enabled', () => {
     const { container: root } = render(<SessionRegistryFilesPanel />);
 
-    const expiredRow = root.querySelector('[data-file-id="sf_expired"]') as HTMLElement;
+    const expiredRow = rowsByFileName(root).expired as HTMLElement;
     const buttons = Array.from(expiredRow.querySelectorAll('button')) as HTMLButtonElement[];
     const anchors = Array.from(expiredRow.querySelectorAll('a')) as HTMLAnchorElement[];
 
@@ -136,7 +160,7 @@ describe('SessionRegistryFilesPanel — expired file presentation', () => {
   it('keeps non-expired file actions enabled', () => {
     const { container: root } = render(<SessionRegistryFilesPanel />);
 
-    const aliveRow = root.querySelector('[data-file-id="sf_alive"]') as HTMLElement;
+    const aliveRow = rowsByFileName(root).alive as HTMLElement;
     const buttons = Array.from(aliveRow.querySelectorAll('button')) as HTMLButtonElement[];
     const anchors = Array.from(aliveRow.querySelectorAll('a')) as HTMLAnchorElement[];
 
@@ -145,5 +169,37 @@ describe('SessionRegistryFilesPanel — expired file presentation', () => {
     expect(previewBtn?.disabled).toBe(false);
     expect(downloadLink?.getAttribute('aria-disabled')).toBeNull();
     expect(downloadLink?.getAttribute('href')).not.toBeNull();
+  });
+
+  it('flips a registry-available row to expired when pathExists reports the file missing', async () => {
+    // registry 里 status 未标 expired（available），但文件实际已被删除/重命名：
+    // 渲染层 stat 检查应把行置灰，跟 registry 自带 expired 的表现一致。
+    (window.platform as any).pathExists = vi.fn(async (path: string) => path.includes('duplicate_finder.py') ? false : true);
+    const { container: root } = render(<SessionRegistryFilesPanel />);
+
+    await waitFor(() => {
+      const expiredRow = rowsByFileName(root).expired;
+      expect(expiredRow?.getAttribute('data-expired')).toBe('true');
+    });
+    const expiredRow = rowsByFileName(root).expired as HTMLElement;
+    expect(expiredRow?.querySelector('[class*="fileIconExpiredBadge"]')).not.toBeNull();
+
+    // 行内动作：preview/open/reveal 置灰，copy path 仍可用
+    const buttons = Array.from(expiredRow.querySelectorAll('button')) as HTMLButtonElement[];
+    const anchors = Array.from(expiredRow.querySelectorAll('a')) as HTMLAnchorElement[];
+    const previewBtn = buttons.find(b => b.getAttribute('title')?.startsWith('预览'));
+    const openBtn = buttons.find(b => b.getAttribute('title')?.startsWith('打开'));
+    const revealBtn = buttons.find(b => b.getAttribute('title')?.startsWith('定位'));
+    const copyBtn = buttons.find(b => b.getAttribute('title')?.startsWith('复制路径'));
+    const downloadLink = anchors.find(a => a.getAttribute('title')?.startsWith('下载'));
+    expect(previewBtn?.disabled).toBe(true);
+    expect(openBtn?.disabled).toBe(true);
+    expect(revealBtn?.disabled).toBe(true);
+    expect(downloadLink?.getAttribute('aria-disabled')).toBe('true');
+    expect(copyBtn?.disabled).toBe(false);
+
+    // 存在性检查没有误伤真实存在的文件
+    const aliveRow = rowsByFileName(root).alive as HTMLElement;
+    expect(aliveRow?.getAttribute('data-expired')).toBe('false');
   });
 });

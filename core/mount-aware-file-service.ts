@@ -514,8 +514,12 @@ function resourceRefForTarget(root, subpath = "") {
 }
 
 function listItemsForWorkbench(items = []) {
+  // 不过滤点前缀文件：.gitignore / .gitattributes / .npmrc / .editorconfig 等仓库元
+  // 文件是用户日常工作对象，要能在右侧工作台看到、可双击预览。点前缀过滤过去是
+  // 为隐藏 .DS_Store / Thumbs.db 这类系统垃圾，但点垃圾的代价是用户常用的仓库配置
+  // 文件都看不到，性价比很低。
   return (Array.isArray(items) ? items : [])
-    .filter((item) => item && !String(item.name || "").startsWith("."))
+    .filter((item) => item && item.name)
     .map((item) => ({
       name: item.name,
       isDir: Boolean(item.isDirectory),

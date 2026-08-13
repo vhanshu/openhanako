@@ -88,6 +88,52 @@ export function FileHistoryModal() {
     return diffLines(currentText, snapshotText);
   }, [snapshotText, currentText]);
 
+  /**
+   * diff 是“当前内容 → 选中快照”语义（还原后会发生什么）：
+   *   - added 行 = 快照有、当前没，oldLine 留空
+   *   - removed 行 = 当前有、快照没，newLine 留空
+   *   - same 行 = 两边都有，两侧行号同步递增
+   * 返回的 lines 把行号付上，渲染侧只负责拼出三列。
+   *
+   * singleColumn：第一个版本（或当前内容读不到）时 diff 退化成快照全文，全部 same，
+   * 没有对比语义——只展示一列行号，统计栏也隐藏。
+   */
+  const numberedDiff = useMemo(() => {
+    if (!diff) return null;
+    const singleColumn = currentText == null;
+    let oldLine = 1;
+    let newLine = 1;
+    let added = 0;
+    let removed = 0;
+    // 显式联合类型：三种 kind 的字段集不同（added 只有 newLine、removed 只有 oldLine），
+    // 统一成可选字段避免渲染侧访问 line.oldLine / line.newLine 时 TS 报错。
+    type NumberedDiffLine = {
+      kind: DiffLine['kind'];
+      text: string;
+      oldLine?: number;
+      newLine?: number;
+    };
+    const lines: NumberedDiffLine[] = diff.map((line) => {
+      if (line.kind === 'added') {
+        added++;
+        const result: NumberedDiffLine = { kind: line.kind, text: line.text, newLine };
+        newLine++;
+        return result;
+      }
+      if (line.kind === 'removed') {
+        removed++;
+        const result: NumberedDiffLine = { kind: line.kind, text: line.text, oldLine };
+        oldLine++;
+        return result;
+      }
+      const result: NumberedDiffLine = { kind: line.kind, text: line.text, oldLine, newLine };
+      oldLine++;
+      newLine++;
+      return result;
+    });
+    return { lines, added, removed, singleColumn };
+  }, [diff, currentText]);
+
   const handleRestore = useCallback(async () => {
     if (!agentId || selectedVersion == null || !selectedPath) return;
     setStatus('restoring');
@@ -121,6 +167,7 @@ export function FileHistoryModal() {
           />
           {activeFiles.map(f => (
             <button key={f.relPath} type="button"
+              title={f.relPath}
               className={`${styles.fileRow}${selectedPath === f.relPath ? ` ${styles.fileRowActive}` : ''}`}
               onClick={() => setSelectedPath(f.relPath)}>
               {f.relPath}
@@ -131,6 +178,7 @@ export function FileHistoryModal() {
               <div className={styles.groupLabel}>{t('fileHistory.deletedGroup')}</div>
               {deletedFiles.map(f => (
                 <button key={f.relPath} type="button"
+                  title={f.relPath}
                   className={`${styles.fileRow} ${styles.fileRowDeleted}${selectedPath === f.relPath ? ` ${styles.fileRowActive}` : ''}`}
                   onClick={() => setSelectedPath(f.relPath)}>
                   {f.relPath}
@@ -156,16 +204,39 @@ export function FileHistoryModal() {
           )}
         </section>
         <section className={styles.diffPane}>
-          {diff ? (
-            <pre className={styles.diff}>
-              {diff.map((line, i) => (
-                <div key={i} className={
-                  line.kind === 'added' ? styles.lineAdded
+          {numberedDiff ? (
+            <>
+              {/* diff 顶部统计：一眼看出这个版本相对当前加多少减多少。
+                  第一个版本（无对比语义）时隐藏。 */}
+              {!numberedDiff.singleColumn && (
+                <div className={styles.diffStats}>
+                  <span className={styles.diffStatsAdded}>+{numberedDiff.added}</span>
+                  <span className={styles.diffStatsRemoved}>-{numberedDiff.removed}</span>
+                </div>
+              )}
+              <pre className={styles.diff} data-testid="fh-diff">
+                {numberedDiff.lines.map((line, i) => {
+                  const className =
+                    line.kind === 'added' ? styles.lineAdded
                     : line.kind === 'removed' ? styles.lineRemoved
-                      : styles.lineSame
-                }>{line.text || ' '}</div>
-              ))}
-            </pre>
+                    : styles.lineSame;
+                  return (
+                    <div key={i} className={className}>
+                      {numberedDiff.singleColumn ? (
+                        // 快照全文：只有新文件一侧，单列行号即可
+                        <span className={styles.lineNum}>{line.newLine ?? ''}</span>
+                      ) : (
+                        <>
+                          <span className={styles.lineNum}>{line.oldLine ?? ''}</span>
+                          <span className={styles.lineNum}>{line.newLine ?? ''}</span>
+                        </>
+                      )}
+                      <span className={styles.lineContent}>{line.text || ' '}</span>
+                    </div>
+                  );
+                })}
+              </pre>
+            </>
           ) : snapshotText != null ? (
             <pre className={styles.diff}>{snapshotText}</pre>
           ) : (

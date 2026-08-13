@@ -2689,6 +2689,8 @@
     "copy": "Copy",
     "paste": "Paste",
     "selectAll": "Select All",
+    "foldSelection": "Fold Selection",
+    "unfoldSelection": "Unfold Selection",
     "undo": "Undo",
     "redo": "Redo",
     "bold": "Bold",
@@ -2762,7 +2764,8 @@
       "status": {
         "available": "Available",
         "expired": "Expired"
-      }
+      },
+      "expiredTooltip": "File expired"
     },
     "jian": {
       "collapse": "Collapse Jian",

@@ -6,6 +6,11 @@ import {
   computeCenteredTransform,
   computeImageCenterPoint,
   effectiveNaturalSize,
+  computeRangeForFit,
+  clampImageCenterToViewport,
+  ZOOM_IN_FACTOR,
+  ZOOM_OUT_FACTOR,
+  MIN_HARD_FLOOR,
 } from '../../../../components/shared/MediaViewer/use-media-transform';
 
 describe('clamp', () => {
@@ -25,6 +30,98 @@ describe('effectiveNaturalSize', () => {
   });
   it('natural 为 null 返回 null', () => {
     expect(effectiveNaturalSize(null, 90)).toBeNull();
+  });
+});
+
+describe('computeRangeForFit', () => {
+  it('大图（fitScale < 1）：min = fitScale / ZOOM_OUT_FACTOR 且不低于 MIN_HARD_FLOOR', () => {
+    // fitScale = 0.5（典型大图），min = max(0.1, 0.5 / 4) = 0.125
+    const r = computeRangeForFit(0.5);
+    expect(r.min).toBeCloseTo(0.5 / ZOOM_OUT_FACTOR);
+    expect(r.min).toBeGreaterThanOrEqual(MIN_HARD_FLOOR);
+    expect(r.max).toBeCloseTo(0.5 * ZOOM_IN_FACTOR);
+  });
+
+  it('极大图（fitScale 极小）：min 被 MIN_HARD_FLOOR 托住，不再往下', () => {
+    // fitScale = 0.02（比 MIN_HARD_FLOOR 还小得多）
+    // 理论上 fitScale / ZOOM_OUT_FACTOR = 0.005，但硬下限是 0.1
+    const r = computeRangeForFit(0.02);
+    expect(r.min).toBe(MIN_HARD_FLOOR);
+    expect(r.min).toBeGreaterThan(0.02 / ZOOM_OUT_FACTOR);
+  });
+
+  it('小图（fitScale >= 1）：min 被锁定为 1（自然像素），不再往下走', () => {
+    // fitScale = 2（图比视口小，fit 是放大版）
+    // 原图 1:1 已经比最小尺寸还小，不再往下
+    const r = computeRangeForFit(2);
+    expect(r.min).toBe(1);
+    expect(r.max).toBeCloseTo(2 * ZOOM_IN_FACTOR);
+  });
+
+  it('边界 fitScale = 1：min 取 1（与上面分支一致）', () => {
+    const r = computeRangeForFit(1);
+    expect(r.min).toBe(1);
+  });
+
+  it('max 不低于 1.0：保证原图自然像素大小始终可达', () => {
+    // 即便 fitScale 极小（fitScale * ZOOM_IN_FACTOR < 1），max 也至少为 1
+    const r = computeRangeForFit(0.05);
+    expect(r.max).toBeGreaterThanOrEqual(1);
+  });
+
+  it('返回值始终满足 min <= max（区间合法）', () => {
+    for (const fit of [0.02, 0.1, 0.5, 0.9, 1, 1.5, 3]) {
+      const r = computeRangeForFit(fit);
+      expect(r.min).toBeLessThanOrEqual(r.max);
+    }
+  });
+});
+
+describe('clampImageCenterToViewport', () => {
+  const vp = { w: 1000, h: 800 };
+
+  it('中心点在 viewport 内：原样返回，dx/dy=0，未溢出', () => {
+    const r = clampImageCenterToViewport({ x: 500, y: 400 }, vp);
+    expect(r.clamped).toEqual({ x: 500, y: 400 });
+    expect(r.dx).toBe(0);
+    expect(r.dy).toBe(0);
+    expect(r.overflowX).toBe(false);
+    expect(r.overflowY).toBe(false);
+  });
+
+  it('中心点恰好在 viewport 边界上：原样返回，未溢出', () => {
+    // 边界 case：中心点 == 边界是允许的状态
+    const r1 = clampImageCenterToViewport({ x: 0, y: 0 }, vp);
+    expect(r1.clamped).toEqual({ x: 0, y: 0 });
+    expect(r1.overflowX).toBe(false);
+    expect(r1.overflowY).toBe(false);
+
+    const r2 = clampImageCenterToViewport({ x: 1000, y: 800 }, vp);
+    expect(r2.clamped).toEqual({ x: 1000, y: 800 });
+    expect(r2.overflowX).toBe(false);
+    expect(r2.overflowY).toBe(false);
+  });
+
+  it('中心点超出右边界：clamp 到 x = viewport.w，dx 为负', () => {
+    const r = clampImageCenterToViewport({ x: 1500, y: 400 }, vp);
+    expect(r.clamped.x).toBe(1000);
+    expect(r.dx).toBe(-500);
+    expect(r.overflowX).toBe(true);
+    expect(r.overflowY).toBe(false);
+  });
+
+  it('中心点超出左边界（x < 0）：clamp 到 x = 0，dx 为正', () => {
+    const r = clampImageCenterToViewport({ x: -200, y: 400 }, vp);
+    expect(r.clamped.x).toBe(0);
+    expect(r.dx).toBe(200);
+    expect(r.overflowX).toBe(true);
+  });
+
+  it('x/y 同时溢出：分别 clamp，overflowX/overflowY 都标记', () => {
+    const r = clampImageCenterToViewport({ x: -100, y: 1000 }, vp);
+    expect(r.clamped).toEqual({ x: 0, y: 800 });
+    expect(r.overflowX).toBe(true);
+    expect(r.overflowY).toBe(true);
   });
 });
 

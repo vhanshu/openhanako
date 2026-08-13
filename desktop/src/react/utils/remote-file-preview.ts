@@ -195,18 +195,52 @@ async function openRemoteContentPreview({
   contentPath: string;
   id: string;
   title: string;
-  ext: string;
+  ext?: string;
   mediaRef?: FileRef;
   mediaContext: { origin: 'desk' | 'session'; sessionPath?: string };
   remoteContentRef?: RemoteWorkbenchContentRef;
 }): Promise<void> {
-  const mediaKind = inferKindByExt(ext);
+  const normalizedExt = (ext || '').replace(/^\./, '').toLowerCase();
+  const mediaKind = inferKindByExt(normalizedExt);
   if (isMediaKind(mediaKind) && mediaRef) {
     openMediaViewerForRef(mediaRef, mediaContext);
     return;
   }
 
-  const previewType = PREVIEWABLE_EXTS[ext];
+  // 无扩展名文件（Dockerfile / Jenkinsfile / BUCK / Makefile 等）：fetch 内容探测
+  // 是否是纯文本。前 8KB 含 NUL 字节 → 二进制，走 file-info；否则当 code 预览，
+  // language 传 basename 让 PreviewEditor 去 @codemirror/language-data 匹配。
+  if (!normalizedExt) {
+    const read = await readContentForPreview(contentPath, 'code');
+    if (isLikelyTextContent(read.content)) {
+      const baseName = (title.split(/[\\/]/).pop() || title).trim();
+      const language = baseName && !baseName.includes('.') ? baseName.toLowerCase() : undefined;
+      openPreview({
+        id,
+        type: 'code',
+        title,
+        content: read.content,
+        ext: '',
+        language,
+        storageKind: 'remote-content',
+        fileVersion: read.fileVersion,
+        remoteContentRef: remoteContentRefWithVersion(remoteContentRef, read.fileVersion),
+      });
+      return;
+    }
+    openPreview({
+      id,
+      type: 'file-info',
+      title,
+      content: '',
+      ext: '',
+      storageKind: 'remote-content',
+      remoteContentRef,
+    });
+    return;
+  }
+
+  const previewType = PREVIEWABLE_EXTS[normalizedExt];
   if (previewType && previewType !== 'docx' && previewType !== 'xlsx') {
     const read = await readContentForPreview(contentPath, previewType);
     const fileVersion = read.fileVersion;
@@ -215,8 +249,8 @@ async function openRemoteContentPreview({
       type: previewType,
       title,
       content: read.content,
-      ext,
-      language: previewType === 'code' ? ext : undefined,
+      ext: normalizedExt,
+      language: previewType === 'code' ? normalizedExt : undefined,
       storageKind: 'remote-content',
       fileVersion,
       remoteContentRef: remoteContentRefWithVersion(remoteContentRef, fileVersion),
@@ -230,10 +264,21 @@ async function openRemoteContentPreview({
     type: 'file-info',
     title,
     content: '',
-    ext,
+    ext: normalizedExt,
     storageKind: 'remote-content',
     remoteContentRef,
   });
+}
+
+/**
+ * 判断 fetch 到的字符串内容是否可能是纯文本。
+ * 用前 8KB 采样，含 NUL 字节 = 几乎肯定是二进制（文本协议不会用 NUL），
+ * 否则走文本路径。前 8KB 是经验值：足够覆盖常见配置文件头，同时对超大文件
+ * （几百 MB 的 binary blob）也能快判。
+ */
+function isLikelyTextContent(content: string): boolean {
+  if (!content) return true; // 空文件按文本走（用户可能希望看到空预览）
+  return !content.slice(0, 8192).includes('\u0000');
 }
 
 export async function saveRemoteWorkbenchContent(

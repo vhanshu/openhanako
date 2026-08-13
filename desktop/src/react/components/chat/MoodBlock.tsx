@@ -1,5 +1,9 @@
 /**
  * MoodBlock — 可折叠的 MOOD/PULSE/REFLECT 区块
+ *
+ * - 默认 collapsed（沿用旧行为）
+ * - 用户点 summary 展开（open=true），可看完整内容
+ * - 展开后点击 body 左侧线条按钮收起（无需其他收起图标）
  */
 
 import { memo, useEffect, useState, useCallback } from 'react';
@@ -18,8 +22,12 @@ interface Props {
 }
 
 export const MoodBlock = memo(function MoodBlock({ yuan, text, sessionPath }: Props) {
+  const label = moodLabel(yuan);
   const [open, setOpen] = useState(false);
-  const toggle = useCallback(() => setOpen(v => !v), []);
+  const toggle = useCallback(() => setOpen((v) => !v), []);
+  const collapse = useCallback(() => setOpen(false), []);
+
+  // 查找命中：自动展开（不反向折叠，避免覆盖用户手动状态）
   const findNeedles = useStore(useShallow((s) => {
     if (!sessionPath) return [];
     const find = sessionScopedValue(s, s.chatFindBySession, sessionPath);
@@ -38,10 +46,19 @@ export const MoodBlock = memo(function MoodBlock({ yuan, text, sessionPath }: Pr
     <div className={styles.moodWrapper} data-yuan={yuan}>
       <div className={styles.moodSummary} onClick={toggle}>
         <span className={`${styles.moodArrow}${open ? ` ${styles.moodArrowOpen}` : ''}`}>›</span>
-        {' '}{moodLabel(yuan)}
+        {' '}{label}
       </div>
       <Collapse open={open}>
-        <div className={styles.moodBlock} data-find-markable="">{text}</div>
+        <div className={styles.moodBlock}>
+          <button
+            type="button"
+            className={styles.moodLeftBar}
+            onClick={collapse}
+            aria-label={label}
+            title={label}
+          />
+          <div className={styles.moodBlockContent} data-find-markable="">{text}</div>
+        </div>
       </Collapse>
     </div>
   );

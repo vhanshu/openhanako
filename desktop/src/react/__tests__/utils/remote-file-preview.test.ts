@@ -307,4 +307,97 @@ describe('remote file preview workbench refs', () => {
       storageKind: 'remote-content',
     });
   });
+
+  it('opens extensionless workbench files (Dockerfile) as code preview via text probe', async () => {
+    const { openWorkbenchFilePreview } = await import('../../utils/remote-file-preview');
+    // LAN 连接让 native-path 不可用，走 workbench-content 路径
+    useStore.setState({
+      activeServerConnection: {
+        connectionId: 'browser:server_lan',
+        kind: 'lan',
+        serverId: 'server_lan',
+        userId: 'user_lan',
+        studioId: 'studio_lan',
+        label: 'LAN Hana',
+        baseUrl: 'http://hana.local:14500',
+        wsUrl: 'ws://hana.local:14500',
+        token: null,
+        authState: 'paired',
+        trustState: 'lan',
+        credentialKind: 'device_credential',
+        platformAccountId: null,
+        officialServiceKind: null,
+        capabilities: ['resources', 'files'],
+      },
+    } as Partial<StoreState>);
+    const file: DeskFile = {
+      name: 'Dockerfile',
+      isDir: false,
+      mtime: '2026-08-12T00:00:00.000Z',
+      size: 30,
+    };
+    mockHanaFetch.mockResolvedValueOnce(new Response('FROM node:20\nWORKDIR /app\n', { status: 200 }));
+
+    await openWorkbenchFilePreview({
+      subdir: '',
+      file,
+    });
+
+    expect(mockOpenFilePreview).not.toHaveBeenCalled();
+    expect(mockHanaFetch).toHaveBeenCalledWith(expect.stringMatching(
+      /^\/api\/workbench\/content\?mountId=default&subdir=&name=Dockerfile&v=/,
+    ));
+    expect(useStore.getState().previewItems[0]).toMatchObject({
+      title: 'Dockerfile',
+      type: 'code',
+      content: 'FROM node:20\nWORKDIR /app\n',
+      ext: '',
+      language: 'dockerfile',
+      storageKind: 'remote-content',
+    });
+  });
+
+  it('extensionless workbench files containing NUL bytes fall back to file-info (binary blob)', async () => {
+    const { openWorkbenchFilePreview } = await import('../../utils/remote-file-preview');
+    useStore.setState({
+      activeServerConnection: {
+        connectionId: 'browser:server_lan',
+        kind: 'lan',
+        serverId: 'server_lan',
+        userId: 'user_lan',
+        studioId: 'studio_lan',
+        label: 'LAN Hana',
+        baseUrl: 'http://hana.local:14500',
+        wsUrl: 'ws://hana.local:14500',
+        token: null,
+        authState: 'paired',
+        trustState: 'lan',
+        credentialKind: 'device_credential',
+        platformAccountId: null,
+        officialServiceKind: null,
+        capabilities: ['resources', 'files'],
+      },
+    } as Partial<StoreState>);
+    const file: DeskFile = {
+      name: 'blob',
+      isDir: false,
+      mtime: '2026-08-12T00:00:00.000Z',
+      size: 1024,
+    };
+    // 头 8KB 里含 NUL = 二进制信号
+    const binary = '\u0000\u0001\u0002BINARY\u0000';
+    mockHanaFetch.mockResolvedValueOnce(new Response(binary, { status: 200 }));
+
+    await openWorkbenchFilePreview({
+      subdir: '',
+      file,
+    });
+
+    expect(useStore.getState().previewItems[0]).toMatchObject({
+      title: 'blob',
+      type: 'file-info',
+      ext: '',
+      storageKind: 'remote-content',
+    });
+  });
 });

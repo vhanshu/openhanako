@@ -115,14 +115,17 @@ describe('MediaViewer interaction', () => {
     await waitFor(() => expect(getByTestId('video-stage-video')).toBeTruthy());
   });
 
-  it('底部显示文件名，顶栏只保留序号和关闭动作', () => {
+  it('顶栏左侧显示文件名（带序号），不再有底部 captionBar', () => {
     useStore.getState().setMediaViewer({ files: [f('a'), f('b'), f('c')], currentId: 'b', origin: 'desk' });
-    const { getByTestId } = render(<MediaViewer />);
+    const { getByTestId, queryByTestId } = render(<MediaViewer />);
     expect(getByTestId('media-viewer-index').textContent).toContain('2 / 3');
-    const caption = getByTestId('media-viewer-caption');
+    const info = getByTestId('media-viewer-topbar-info');
     const name = getByTestId('media-viewer-name');
-    expect(caption.contains(name)).toBe(true);
+    expect(info.contains(name)).toBe(true);
+    expect(info.contains(getByTestId('media-viewer-index'))).toBe(true);
     expect(name.textContent).toContain('b.png');
+    // 旧的底部 caption 容器已经移除
+    expect(queryByTestId('media-viewer-caption')).toBeNull();
   });
 
   it('+ 键触发 zoomIn 命令', () => {

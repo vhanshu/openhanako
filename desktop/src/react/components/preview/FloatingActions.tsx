@@ -326,6 +326,9 @@ export function FloatingActions({
   const editTitle = t('preview.html.edit');
   const htmlPreviewTitle = t('preview.html.preview');
 
+  // html 渲染模式 = 提供了切换且当前不在编辑模式（iframe 预览中）
+  const isHtmlRenderMode = Boolean(onToggleHtmlEdit && !htmlEditMode);
+
   const coverNotice = useCallback((key: string, vars?: Record<string, string>) => {
     const translated = t(key, vars);
     return translated !== key ? translated : key;
@@ -508,79 +511,110 @@ export function FloatingActions({
     <div className={floatingActionsClassName} data-react-managed ref={floatingActionsRef}>
       <div className={styles.floatingActionsSurface}>
         {onToggleWordWrap && (
-          <button
-            type="button"
-            className={`${styles.actionBtn}${wordWrap ? ` ${styles.actionBtnActive}` : ''}`}
-            onClick={handleToggleWordWrap}
-            aria-label={wordWrapTitle}
-            aria-pressed={wordWrap}
-            title={wordWrapTitle}
-            disabled={expired}
-          >
-            <WordWrapIcon />
-          </button>
+          <Tooltip content={wordWrapTitle} placement="top" align="end">
+            {({ ref, ...tooltipProps }) => (
+              <button
+                ref={(node) => ref(node)}
+                type="button"
+                className={`${styles.actionBtn}${wordWrap ? ` ${styles.actionBtnActive}` : ''}`}
+                onClick={handleToggleWordWrap}
+                aria-label={wordWrapTitle}
+                aria-pressed={wordWrap}
+                disabled={expired}
+                {...tooltipProps}
+              >
+                <WordWrapIcon />
+              </button>
+            )}
+          </Tooltip>
         )}
-        {/* html 文件编辑模式下提供一个"预览"图标，与 wrap 按钮并列 */}
+        {/* html 文件编辑模式下提供一个“预览”图标，与 wrap 按钮并列 */}
         {onToggleHtmlEdit && htmlEditMode && (
-          <button
-            type="button"
-            className={styles.actionBtn}
-            onClick={onToggleHtmlEdit}
-            aria-label={htmlPreviewTitle}
-            title={htmlPreviewTitle}
-            disabled={expired}
-          >
-            <EyeIcon />
-          </button>
+          <Tooltip content={htmlPreviewTitle} placement="top" align="end">
+            {({ ref, ...tooltipProps }) => (
+              <button
+                ref={(node) => ref(node)}
+                type="button"
+                className={styles.actionBtn}
+                onClick={onToggleHtmlEdit}
+                aria-label={htmlPreviewTitle}
+                disabled={expired}
+                {...tooltipProps}
+              >
+                <EyeIcon />
+              </button>
+            )}
+          </Tooltip>
         )}
         {/* html 渲染模式下隐藏 copy：预览场景用户能直接看文档，复制正文没意义 */}
         {!(onToggleHtmlEdit && !htmlEditMode) && (
-          <button
-            className={styles.actionBtn}
-            onClick={handleCopy}
-            aria-label={copyTitle}
-            title={copyTitle}
-            disabled={expired}
-          >
-            <CopyIcon />
-          </button>
+          <Tooltip content={copyTitle} placement="top" align="end">
+            {({ ref, ...tooltipProps }) => (
+              <button
+                ref={(node) => ref(node)}
+                type="button"
+                className={styles.actionBtn}
+                onClick={handleCopy}
+                aria-label={copyTitle}
+                disabled={expired}
+                {...tooltipProps}
+              >
+                <CopyIcon />
+              </button>
+            )}
+          </Tooltip>
         )}
         {/* html 文件渲染模式下：缩小、放大、编辑 */}
         {onZoomOut && (
-          <button
-            type="button"
-            className={styles.actionBtn}
-            onClick={onZoomOut}
-            aria-label={zoomOutTitle}
-            title={zoomOutTitle}
-            disabled={expired}
-          >
-            <ZoomOutIcon />
-          </button>
+          <Tooltip content={zoomOutTitle} placement="top" align="end">
+            {({ ref, ...tooltipProps }) => (
+              <button
+                ref={(node) => ref(node)}
+                type="button"
+                className={styles.actionBtn}
+                onClick={onZoomOut}
+                aria-label={zoomOutTitle}
+                disabled={expired}
+                {...tooltipProps}
+              >
+                <ZoomOutIcon />
+              </button>
+            )}
+          </Tooltip>
         )}
         {onZoomIn && (
-          <button
-            type="button"
-            className={styles.actionBtn}
-            onClick={onZoomIn}
-            aria-label={zoomInTitle}
-            title={zoomInTitle}
-            disabled={expired}
-          >
-            <ZoomInIcon />
-          </button>
+          <Tooltip content={zoomInTitle} placement="top" align="end">
+            {({ ref, ...tooltipProps }) => (
+              <button
+                ref={(node) => ref(node)}
+                type="button"
+                className={styles.actionBtn}
+                onClick={onZoomIn}
+                aria-label={zoomInTitle}
+                disabled={expired}
+                {...tooltipProps}
+              >
+                <ZoomInIcon />
+              </button>
+            )}
+          </Tooltip>
         )}
         {onToggleHtmlEdit && !htmlEditMode && (
-          <button
-            type="button"
-            className={styles.actionBtn}
-            onClick={onToggleHtmlEdit}
-            aria-label={editTitle}
-            title={editTitle}
-            disabled={expired}
-          >
-            <EditIcon />
-          </button>
+          <Tooltip content={editTitle} placement="top" align="end">
+            {({ ref, ...tooltipProps }) => (
+              <button
+                ref={(node) => ref(node)}
+                type="button"
+                className={styles.actionBtn}
+                onClick={onToggleHtmlEdit}
+                aria-label={editTitle}
+                disabled={expired}
+                {...tooltipProps}
+              >
+                <EditIcon />
+              </button>
+            )}
+          </Tooltip>
         )}
         {contentType === 'markdown' && coverTarget && systemCoverAvailable && (
           <div className={styles.coverActionWrap} ref={coverMenuRef}>
@@ -683,7 +717,8 @@ export function FloatingActions({
             </div>
           </div>
         )}
-        {filePath && (
+        {/* html 渲染模式下隐藏历史版本：预览场景看不到可编辑文件上下文，历史入口无意义 */}
+        {filePath && !isHtmlRenderMode && (
           <Tooltip content={t('preview.fileHistory')} placement="top" align="end">
             {({ ref, ...tooltipProps }) => (
               <button

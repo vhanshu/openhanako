@@ -409,6 +409,7 @@
 }
 
 .moodBlock {
+    position: relative;
     margin-top: var(--space-4);
     padding: var(--space-8) var(--space-16);
     color: var(--text-muted);
@@ -419,6 +420,31 @@
     border-left: 2px solid var(--mood-accent);
     border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
     opacity: 0.7;
+}
+
+.moodBlockContent {
+    /* 内容自然高度，无 3 行视窗限制（MOOD 内容较短） */
+}
+
+/* 左侧线条按钮：点此收起整个 body（取代之前左下角三角） */
+.moodLeftBar {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 10px;
+    padding: 0;
+    margin: 0;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    transition: background var(--duration-fast) var(--ease-out);
+}
+
+.moodLeftBar:hover,
+.moodLeftBar:focus-visible {
+    background: color-mix(in srgb, var(--mood-accent) 12%, transparent);
+    outline: none;
 }
 
 /* ── 幕间消息 ── */
@@ -1599,16 +1625,89 @@
     transform: rotate(90deg);
 }
 
-.thinkingBlockBody {
+/* Streaming 进度展示：固定 3 行视窗，内部 content 用 translateY 向上偏移。
+   高度严格对齐 3 行：line-height * 3 + 上下 padding，不允许文字拦腰截断。 */
+
+/* idle 状态：内容 < 3 行。用 height:0 而不是 display:none 隐藏 —
+   display:none 会让子元素 scrollHeight 变 0，永远测不出“3 行”条件。 */
+.progressStreamIdle {
+    height: 0;
+    overflow: hidden;
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+
+/* 活跃状态：内容 ≥ 3 行，固定 3 行高度 + 平滑滚动。
+   点击该组件 → onExpand，跳到 full 模式看完整内容。 */
+.progressStreamActive {
+    position: relative;
     margin-top: var(--space-4);
     padding: var(--space-8) var(--space-16);
+    border-left: 2px solid var(--border);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    height: calc(1.6 * var(--fs-caption) * 3 + var(--space-8) * 2);
+    box-sizing: border-box;
+    overflow: hidden;
+    cursor: pointer;
+    transition: background var(--duration-fast) var(--ease-out);
+}
+
+.progressStreamActive:hover,
+.progressStreamActive:focus-visible {
+    background: var(--overlay-light);
+    outline: none;
+}
+
+.progressContent {
     color: var(--text-muted);
     font-style: italic;
     font-size: var(--fs-caption);
     line-height: 1.6;
     white-space: pre-wrap;
+    word-break: break-word;
+    /* translateY 平滑过渡，实现“内容向上滚动”的视觉 */
+    transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    will-change: transform;
+}
+
+/* 展开后的完整内容容器 */
+.thinkingFull {
+    position: relative;
+    margin-top: var(--space-4);
+    padding: var(--space-8) var(--space-16);
     border-left: 2px solid var(--border);
     border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.thinkingFullContent {
+    color: var(--text-muted);
+    font-style: italic;
+    font-size: var(--fs-caption);
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* 左侧线条按钮：点此收起整个 body（取代之前左下角三角） */
+.thinkingLeftBar {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 10px;
+    padding: 0;
+    margin: 0;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    transition: background var(--duration-fast) var(--ease-out);
+}
+
+.thinkingLeftBar:hover,
+.thinkingLeftBar:focus-visible {
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    outline: none;
 }
 
 /* ── 文件输出卡片操作按钮 ── */
@@ -2616,6 +2715,87 @@
     /* 默认 8 太宽会断对齐；代码块/JSON 里 tab 常见，设为 4。 */
     tab-size: 4;
     -moz-tab-size: 4;
+}
+
+/* edit 工具 unified patch 容器：行级上色，靠 <pre> 提供 monospace + 横向滚动 */
+.toolInspectorDiff {
+    margin: 0;
+    padding: var(--space-8) 0;
+    background: var(--overlay-subtle);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: var(--fs-caption);
+    line-height: 1.55;
+    color: var(--text);
+    overflow-x: auto;
+    max-height: 50vh;
+    overflow-y: auto;
+    tab-size: 4;
+    -moz-tab-size: 4;
+}
+
+/* 三列行布局：旧行号 + 新行号 + 内容。每行是一个 flex 容器，三个 span 列。
+ * padding 放在 .toolInspectorDiffContent 上（行号列不参与 padding，避免数字错位）。 */
+.toolInspectorDiffAdded,
+.toolInspectorDiffRemoved,
+.toolInspectorDiffContext,
+.toolInspectorDiffHunk,
+.toolInspectorDiffHeader {
+    display: flex;
+    align-items: baseline;
+    white-space: pre;
+}
+
+.toolInspectorDiffLineNum {
+    /* flex 0 0 4ch：固定 4 个字符宽度；右对齐；不被用户选中（避免拖选时把行号也圈进去）。 */
+    flex: 0 0 4ch;
+    text-align: right;
+    padding-right: var(--space-8);
+    color: var(--text-muted);
+    user-select: none;
+    -webkit-user-select: none;
+    font-variant-numeric: tabular-nums;
+}
+
+.toolInspectorDiffContent {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0 var(--space-12);
+}
+
+.toolInspectorDiffAdded {
+    /* 绿底淡透：与 --green 同色，14% 不透明度，保持阅读舒适 */
+    background: color-mix(in srgb, var(--green) 14%, transparent);
+}
+
+.toolInspectorDiffRemoved {
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.toolInspectorDiffContext {
+    color: var(--text-muted);
+}
+
+.toolInspectorDiffHunk {
+    /* hunk header：'@@ -10,7 +10,7 @@'，用次级色调让眼睛跳过 */
+    color: var(--text-muted);
+    background: var(--overlay-light);
+    font-style: italic;
+}
+
+.toolInspectorDiffHeader {
+    /* 文件 header：'--- a/xxx' / '+++ b/xxx'，跟 hunk header 类似但完全灰 */
+    color: var(--text-muted);
+}
+
+/* hunk header 后追加的 +/- 统计：跟 hunk header 同一个色调，但小一号、更轻 */
+.toolInspectorDiffStats {
+    color: var(--text-muted);
+    font-size: 0.85em;
+    font-style: normal;
+    margin-left: var(--space-4);
+    font-variant-numeric: tabular-nums;
 }
 
 .toolInspectorEmpty {

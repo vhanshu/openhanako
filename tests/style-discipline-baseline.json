@@ -156,7 +156,7 @@
   },
   "desktop/src/react/components/right-workspace/RightWorkspacePanel.module.css": {
     "bare-spacing": 9,
-    "hardcoded-color": 9,
+    "hardcoded-color": 11,
     "bare-duration": 6
   },
   "desktop/src/react/components/right-workspace/SessionStatusCard.module.css": {
@@ -181,7 +181,7 @@
   },
   "desktop/src/react/components/shared/AttachmentChip.module.css": {
     "bare-spacing": 1,
-    "hardcoded-color": 1,
+    "hardcoded-color": 2,
     "bare-duration": 0
   },
   "desktop/src/react/components/shared/AudioAttachmentChip.module.css": {
@@ -190,8 +190,8 @@
     "bare-duration": 0
   },
   "desktop/src/react/components/shared/MediaViewer/MediaViewer.module.css": {
-    "bare-spacing": 3,
-    "hardcoded-color": 14,
+    "bare-spacing": 5,
+    "hardcoded-color": 16,
     "bare-duration": 1
   },
   "desktop/src/react/components/shared/TimelineRailNavigator.module.css": {

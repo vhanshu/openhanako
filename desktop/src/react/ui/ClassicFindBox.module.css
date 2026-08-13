@@ -1,7 +1,6 @@
 .findBox {
     position: absolute;
-    right: -10px;
-    top: -12px;
+    right: 10px;
     z-index: 12;
     display: flex;
     align-items: center;

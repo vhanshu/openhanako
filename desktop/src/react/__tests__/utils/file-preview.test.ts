@@ -151,4 +151,99 @@ describe('file-preview IPC error handling', () => {
       sourceRootPath: '/workspace',
     }));
   });
+
+  it('无扩展名的纯文本文件（如 Dockerfile）走 code 预览，language 透传给 PreviewEditor 高亮', async () => {
+    (window as any).platform.readFileSnapshot.mockResolvedValue({
+      content: 'FROM node:20\nWORKDIR /app\n',
+      version: { mtimeMs: 100, size: 30, sha256: 'abc' },
+    });
+
+    await expect(openFilePreview('/repo/Dockerfile', 'Dockerfile', '', { origin: 'desk' })).resolves.toBeUndefined();
+
+    expect(mocks.openPreview).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'file-/repo/Dockerfile',
+      type: 'code',
+      title: 'Dockerfile',
+      content: 'FROM node:20\nWORKDIR /app\n',
+      filePath: '/repo/Dockerfile',
+      ext: '',
+      language: 'dockerfile',
+      fileVersion: { mtimeMs: 100, size: 30, sha256: 'abc' },
+    }));
+    expect((window as any).platform.readFileSnapshot).toHaveBeenCalledWith('/repo/Dockerfile');
+  });
+
+  it('无扩展名但含点的文件名（Dockerfile.local）按 txt 处理，不传 language', async () => {
+    (window as any).platform.readFileSnapshot.mockResolvedValue({
+      content: 'local override\n',
+      version: { mtimeMs: 100, size: 15, sha256: 'abc' },
+    });
+
+    await expect(openFilePreview('/repo/Dockerfile.local', 'Dockerfile.local', '', { origin: 'desk' })).resolves.toBeUndefined();
+
+    expect(mocks.openPreview).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'code',
+      title: 'Dockerfile.local',
+      ext: '',
+      language: undefined,
+    }));
+  });
+
+  it('无扩展名文件探测不到纯文本（readFileSnapshot 返 null）走 file-info', async () => {
+    (window as any).platform.readFileSnapshot.mockResolvedValue(null);
+
+    await expect(openFilePreview('/repo/blob', 'blob', '', { origin: 'desk' })).resolves.toBeUndefined();
+
+    expect(mocks.openPreview).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'file-/repo/blob',
+      type: 'file-info',
+      title: 'blob',
+      filePath: '/repo/blob',
+      ext: '',
+    }));
+    expect(mocks.openPreview).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'expired' }));
+  });
+
+  it('路径含混合分隔符的无扩展名文件，basename 提取仍能正确传 language', async () => {
+    (window as any).platform.readFileSnapshot.mockResolvedValue({
+      content: 'build\n',
+      version: { mtimeMs: 100, size: 6, sha256: 'abc' },
+    });
+
+    await expect(openFilePreview(
+      'C:\\repo\\sub\\Jenkinsfile',
+      'C:\\repo\\sub\\Jenkinsfile',
+      '',
+      { origin: 'desk' },
+    )).resolves.toBeUndefined();
+
+    expect(mocks.openPreview).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'code',
+      title: 'C:\\repo\\sub\\Jenkinsfile',
+      ext: '',
+      language: 'jenkinsfile',
+    }));
+  });
+
+  it('ext 为 undefined（workbench 路径传过来）走空 ext 探测分支，不会抛 TypeError', async () => {
+    (window as any).platform.readFileSnapshot.mockResolvedValue({
+      content: 'FROM node:20\n',
+      version: { mtimeMs: 100, size: 14, sha256: 'abc' },
+    });
+
+    await expect(openFilePreview(
+      '/repo/Dockerfile',
+      'Dockerfile',
+      undefined as unknown as string,
+      { origin: 'desk' },
+    )).resolves.toBeUndefined();
+
+    expect(mocks.showError).not.toHaveBeenCalled();
+    expect(mocks.openPreview).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'code',
+      title: 'Dockerfile',
+      ext: '',
+      language: 'dockerfile',
+    }));
+  });
 });

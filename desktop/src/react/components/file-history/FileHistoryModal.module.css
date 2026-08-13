@@ -56,7 +56,9 @@
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 240px 220px 1fr;
+  /* 中栏 fit-content(200px)：宽度由内容决定（通常贴近时间文本），
+   * 但 ja 的 origin 文案（ベースラインスナップショット）比时间更宽，封顶 200 防撑爆。 */
+  grid-template-columns: 240px fit-content(200px) 1fr;
   gap: var(--space-8);
   padding: var(--space-8) var(--space-16) var(--space-16);
   overflow: hidden;
@@ -191,12 +193,18 @@
   font-size: var(--fs-caption);
   color: var(--text, #3b3d3f);
   line-height: 1.4;
+  white-space: nowrap;
 }
 
 .versionOrigin {
   font-size: var(--fs-hint);
   color: var(--text-muted, rgba(0, 0, 0, 0.5));
   line-height: 1.4;
+  /* 轨道被 fit-content 封顶时，超长的 origin（如 ja 的基线快照）截断不换行 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 /* ── 右栏：diff 与还原 ────────────────────────── */
@@ -226,8 +234,25 @@
 .lineSame,
 .lineAdded,
 .lineRemoved {
-  padding: 0 var(--space-12);
+  display: flex;
+  align-items: baseline;
   white-space: pre;
+}
+
+.lineNum {
+  flex: 0 0 4ch;
+  text-align: right;
+  padding-right: var(--space-8);
+  color: var(--text-muted, rgba(0, 0, 0, 0.55));
+  user-select: none;
+  -webkit-user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.lineContent {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 var(--space-12);
 }
 
 .lineSame {
@@ -242,6 +267,28 @@
 .lineRemoved {
   background: color-mix(in srgb, var(--danger, #8B3A3A) 12%, transparent);
   color: var(--text, #3b3d3f);
+}
+
+/* diff 顶部统计行：+5 -2 这种缩略，跟 diff 内容一起上下抵住 */
+.diffStats {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-12);
+  padding: var(--space-8) var(--space-12);
+  border-bottom: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+  font-family: var(--font-mono, "SF Mono", "Consolas", monospace);
+  font-size: var(--fs-hint);
+  color: var(--text-muted, rgba(0, 0, 0, 0.6));
+}
+
+.diffStatsAdded {
+  color: color-mix(in srgb, var(--green, #7BAE7F) 80%, var(--text, #000));
+  font-variant-numeric: tabular-nums;
+}
+
+.diffStatsRemoved {
+  color: color-mix(in srgb, var(--danger, #8B3A3A) 80%, var(--text, #000));
+  font-variant-numeric: tabular-nums;
 }
 
 .actions {
@@ -300,7 +347,7 @@
   }
 
   .body {
-    grid-template-columns: 180px 170px 1fr;
+    grid-template-columns: 180px fit-content(180px) 1fr;
     padding: var(--space-8) var(--space-8) var(--space-12);
   }
 }

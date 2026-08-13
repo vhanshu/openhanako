@@ -13,11 +13,10 @@ import { isToolCallHiddenFromProcessUi } from '../../utils/tool-call-visibility'
 import { getToolLabel, phaseForStatus, sessionToolTargetName, sessionToolTargetPath } from '../../utils/tool-label';
 import { useStore } from '../../stores';
 import { switchSession } from '../../stores/session-actions';
+import { sessionScopedValue } from '../../stores/session-slice';
 import { LinkContextMenu, type LinkContextMenuState } from '../shared/LinkContextMenu';
 
 import type { ToolCall } from '../../stores/chat-types';
-import { useStore } from '../../stores';
-import { sessionScopedValue } from '../../stores/session-slice';
 
 interface Props {
   tools: ToolCall[];
@@ -25,20 +24,6 @@ interface Props {
   agentName?: string;
   /** 用于读 findState；任一 tool detail.text 命中 needle 时自动展开 */
   sessionPath?: string;
-}
-
-export const ToolGroupBlock = memo(function ToolGroupBlock({ tools: rawTools, collapsed: initialCollapsed, agentName = 'Hanako' }: Props) {
-function getToolLabel(name: string, phase: string, agentName: string): string {
-  const t = window.t;
-  const vars = { name: agentName };
-  const labelName = name === 'exec_command'
-    ? 'bash'
-    : name === 'write_stdin'
-      ? 'terminal'
-      : name;
-  const val = t?.(`tool.${labelName}.${phase}`, vars);
-  if (val && val !== `tool.${labelName}.${phase}`) return val;
-  return t?.(`tool._fallback.${phase}`, vars) || name;
 }
 
 export const ToolGroupBlock = memo(function ToolGroupBlock({ tools: rawTools, collapsed: initialCollapsed, agentName = 'Hanako', sessionPath }: Props) {

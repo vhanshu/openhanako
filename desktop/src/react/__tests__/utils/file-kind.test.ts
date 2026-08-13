@@ -11,8 +11,68 @@ describe('inferKindByExt', () => {
     ['pdf', 'pdf'],
     ['docx', 'doc'], ['xlsx', 'doc'], ['xls', 'doc'],
     ['md', 'markdown'], ['markdown', 'markdown'],
+    // ── 历史代码 ──
     ['js', 'code'], ['ts', 'code'], ['py', 'code'], ['json', 'code'],
     ['html', 'code'], ['csv', 'code'],
+    // ── 新增：纯文本 / 代码全量扩展名 ──
+    // JS/TS
+    ['mjs', 'code'], ['cjs', 'code'], ['jsx', 'code'], ['mts', 'code'], ['cts', 'code'], ['tsx', 'code'],
+    // Web 前端
+    ['vue', 'code'], ['svelte', 'code'], ['astro', 'code'],
+    ['scss', 'code'], ['sass', 'code'], ['less', 'code'], ['styl', 'code'], ['stylus', 'code'],
+    // 模板 / 文档
+    ['hbs', 'code'], ['handlebars', 'code'], ['pug', 'code'], ['jade', 'code'],
+    ['ejs', 'code'], ['erb', 'code'], ['liquid', 'code'], ['j2', 'code'], ['jinja', 'code'],
+    // 数据 / 序列化
+    ['json5', 'code'], ['jsonld', 'code'], ['map', 'code'], ['geojson', 'code'], ['ndjson', 'code'],
+    ['toml', 'code'], ['yaml', 'code'], ['yml', 'code'],
+    ['xml', 'code'], ['xsl', 'code'], ['xsd', 'code'], ['rss', 'code'], ['wsdl', 'code'],
+    // Shell
+    ['bash', 'code'], ['zsh', 'code'], ['ksh', 'code'], ['fish', 'code'],
+    ['ps1', 'code'], ['psd1', 'code'], ['psm1', 'code'], ['bat', 'code'], ['cmd', 'code'],
+    // C / C++
+    ['h', 'code'], ['ino', 'code'], ['cc', 'code'], ['cxx', 'code'], ['hpp', 'code'], ['hxx', 'code'], ['hh', 'code'],
+    // JVM
+    ['java', 'code'], ['kt', 'code'], ['kts', 'code'], ['scala', 'code'],
+    ['groovy', 'code'], ['gradle', 'code'],
+    ['clj', 'code'], ['cljc', 'code'], ['cljs', 'code'],
+    // 脚本 / 动态
+    ['rb', 'code'], ['rake', 'code'], ['pyw', 'code'],
+    ['pl', 'code'], ['pm', 'code'], ['perl', 'code'],
+    ['php', 'code'], ['lua', 'code'], ['tcl', 'code'], ['vim', 'code'],
+    ['r', 'code'], ['cr', 'code'], ['dart', 'code'],
+    // 函数式
+    ['hs', 'code'], ['haskell', 'code'], ['ml', 'code'], ['mli', 'code'], ['ocaml', 'code'],
+    ['fs', 'code'], ['fsharp', 'code'], ['ex', 'code'], ['exs', 'code'], ['erl', 'code'], ['erlang', 'code'],
+    ['elm', 'code'], ['cob', 'code'], ['cobol', 'code'], ['cpy', 'code'],
+    ['pas', 'code'], ['pascal', 'code'], ['scm', 'code'], ['scheme', 'code'],
+    ['lisp', 'code'], ['cl', 'code'], ['el', 'code'], ['edn', 'code'], ['sml', 'code'],
+    ['coffee', 'code'], ['coffeescript', 'code'], ['livescript', 'code'], ['ls', 'code'],
+    // 现代 / 系统
+    ['go', 'code'], ['rs', 'code'], ['rust', 'code'],
+    ['swift', 'code'], ['m', 'code'], ['mm', 'code'],
+    ['d', 'code'], ['haxe', 'code'], ['hx', 'code'],
+    // 硬件描述
+    ['v', 'code'], ['verilog', 'code'], ['sv', 'code'], ['systemverilog', 'code'], ['vhdl', 'code'], ['vhd', 'code'],
+    // 数据库 / 查询
+    ['sql', 'code'], ['cql', 'code'], ['cypher', 'code'], ['sparql', 'code'],
+    ['protobuf', 'code'], ['proto', 'code'], ['graphql', 'code'], ['gql', 'code'],
+    // 构建 / 部署
+    ['dockerfile', 'code'], ['docker', 'code'], ['cmake', 'code'], ['nginx', 'code'], ['puppet', 'code'],
+    // 配置 / 纯文本（未知语言按 txt 展示）
+    ['properties', 'code'], ['ini', 'code'], ['in', 'code'], ['cfg', 'code'], ['conf', 'code'], ['htaccess', 'code'],
+    ['log', 'code'], ['tsv', 'code'], ['txt', 'code'],
+    // 点前缀文件（extOfName 返回整段）
+    ['env', 'code'],
+    ['gitignore', 'code'], ['gitattributes', 'code'], ['dockerignore', 'code'],
+    ['editorconfig', 'code'], ['npmrc', 'code'],
+    // 字处理 / 排版
+    ['bib', 'code'], ['tex', 'code'], ['dtx', 'code'],
+    // 其他
+    ['diff', 'code'], ['patch', 'code'],
+    ['http', 'code'], ['hxml', 'code'], ['jl', 'code'], ['julia', 'code'],
+    ['wat', 'code'], ['wast', 'code'], ['webassembly', 'code'],
+    ['asm', 'code'], ['s', 'code'],
   ])('ext %s → kind %s', (ext, kind) => {
     expect(inferKindByExt(ext)).toBe(kind);
   });

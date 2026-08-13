@@ -2689,6 +2689,8 @@
     "copy": "复制",
     "paste": "粘贴",
     "selectAll": "全选",
+    "foldSelection": "折叠选区",
+    "unfoldSelection": "展开选区",
     "undo": "撤销",
     "redo": "重做",
     "bold": "加粗",
@@ -2762,7 +2764,8 @@
       "status": {
         "available": "可用",
         "expired": "已过期"
-      }
+      },
+      "expiredTooltip": "文件已过期"
     },
     "jian": {
       "collapse": "收起笺",

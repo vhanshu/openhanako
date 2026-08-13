@@ -234,7 +234,7 @@ describe('ImageStage', () => {
     expect(stage.dataset.rotation).toBe('90');
   });
 
-  it('rotate 保持当前 scale 不变，offset 清零保证视觉中心不变', async () => {
+  it('rotate 保持当前 scale 和 offset 不变，视觉中心原地不动', async () => {
     const ref = React.createRef<import('../../../../components/shared/MediaViewer/ImageStage').ImageStageActions>();
     const { container } = render(
       <ImageStage ref={ref} file={file} viewport={{ width: 1000, height: 800 }} />,
@@ -254,6 +254,7 @@ describe('ImageStage', () => {
     const before = ref.current!.getTransform();
     expect(before.scale).toBeGreaterThan(0);
     expect(before.rotation).toBe(0);
+    // fit 状态下视觉中心 = viewport 中心，所以 offsetX/Y = 0
     expect(before.offsetX).toBe(0);
     expect(before.offsetY).toBe(0);
 
@@ -264,18 +265,18 @@ describe('ImageStage', () => {
     // scale 保持不变（“不改变大小”）
     expect(rotated.scale).toBeCloseTo(before.scale);
     expect(rotated.rotation).toBe(90);
-    // offset 清零保证旋转后视觉中心在 viewport 中心
-    expect(rotated.offsetX).toBe(0);
-    expect(rotated.offsetY).toBe(0);
+    // offset 保持不变：旋转不动图片中心点
+    expect(rotated.offsetX).toBe(before.offsetX);
+    expect(rotated.offsetY).toBe(before.offsetY);
 
-    // 再转一次：scale 还是同一个值
+    // 再转一次：scale / offset 还是同一个值
     ref.current?.rotateCw();
     await waitFor(() => expect(stage.dataset.rotation).toBe('180'));
     const rotated180 = ref.current!.getTransform();
     expect(rotated180.scale).toBeCloseTo(before.scale);
     expect(rotated180.rotation).toBe(180);
-    expect(rotated180.offsetX).toBe(0);
-    expect(rotated180.offsetY).toBe(0);
+    expect(rotated180.offsetX).toBe(before.offsetX);
+    expect(rotated180.offsetY).toBe(before.offsetY);
 
     // 验证 cssTransform 中元素视觉中心确实是 viewport 中心
     // （利用 use-media-transform.test.ts 中纯函数的同样语义）
@@ -422,5 +423,280 @@ describe('ImageStage', () => {
     // imageCenterX = tx + eff.w/2 (与 scale 无关)
     // tx_after + eff.w/2 === tx_fit + eff.w/2  ↔  tx_after === tx_fit
     expect(Math.abs(txAfter - txFit)).toBeLessThan(0.5);
+  });
+
+  it('natural 未就位前 img visibility=hidden 且 spinner 显示，避免 transform 错位导致“右下角闪烁”', async () => {
+    const { container } = render(<ImageStage file={file} viewport={{ width: 800, height: 600 }} />);
+    // 等 src 设上
+    await waitFor(() => {
+      const img = container.querySelector('img');
+      expect(img?.getAttribute('src')).toBeTruthy();
+    });
+    const img = container.querySelector('img')!;
+    // 此时 natural 还没设上，img 应 hidden，spinner 应显示
+    expect(img.style.visibility).toBe('hidden');
+    expect(container.querySelector('[data-testid="image-stage-spinner"]')).toBeTruthy();
+
+    // 模拟 onLoad：给 naturalWidth/Height + fireEvent.load
+    Object.defineProperty(img, 'naturalWidth', { value: 400, configurable: true });
+    Object.defineProperty(img, 'naturalHeight', { value: 300, configurable: true });
+    fireEvent.load(img);
+
+    // natural 就位后 img visible，spinner 移除
+    await waitFor(() => expect(img.style.visibility).toBe('visible'));
+    expect(container.querySelector('[data-testid="image-stage-spinner"]')).toBeNull();
+  });
+
+  it('拖动后再 zoomIn/zoomOut：offset 保持拖动值，图片中心原地缩放', async () => {
+    const ref = React.createRef<import('../../../../components/shared/MediaViewer/ImageStage').ImageStageActions>();
+    const { container } = render(
+      <ImageStage ref={ref} file={file} viewport={{ width: 1000, height: 800 }} />,
+    );
+    await waitFor(() => {
+      const img = container.querySelector('img');
+      expect(img?.getAttribute('src')).toBeTruthy();
+    });
+    const img = container.querySelector('img')!;
+    Object.defineProperty(img, 'naturalWidth', { value: 500, configurable: true });
+    Object.defineProperty(img, 'naturalHeight', { value: 400, configurable: true });
+    fireEvent.load(img);
+
+    const stage = container.querySelector('[data-testid="image-stage"]') as HTMLElement;
+    await waitFor(() => expect(stage.style.transform).toContain('scale('));
+
+    stage.setPointerCapture = vi.fn();
+    stage.releasePointerCapture = vi.fn();
+    stage.hasPointerCapture = vi.fn(() => true);
+
+    // 拖动图片
+    fireEvent.pointerDown(stage, { pointerId: 1, button: 0, clientX: 500, clientY: 400 });
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: 600, clientY: 450 });
+    fireEvent.pointerUp(stage, { pointerId: 1 });
+
+    const dragged = ref.current!.getTransform();
+    expect(Math.abs(dragged.offsetX)).toBeGreaterThan(0.1);
+    expect(Math.abs(dragged.offsetY)).toBeGreaterThan(0.1);
+
+    // zoomIn：scale 变，但 offset 保持拖动值
+    ref.current?.zoomIn();
+    await waitFor(() => {
+      const t = ref.current!.getTransform();
+      expect(t.scale).toBeGreaterThan(dragged.scale);
+    });
+    const afterZoomIn = ref.current!.getTransform();
+    expect(afterZoomIn.offsetX).toBeCloseTo(dragged.offsetX);
+    expect(afterZoomIn.offsetY).toBeCloseTo(dragged.offsetY);
+
+    // zoomOut：scale 变，但 offset 依然保持
+    ref.current?.zoomOut();
+    ref.current?.zoomOut();
+    await waitFor(() => {
+      const t = ref.current!.getTransform();
+      expect(t.scale).toBeLessThan(afterZoomIn.scale);
+    });
+    const afterZoomOut = ref.current!.getTransform();
+    expect(afterZoomOut.offsetX).toBeCloseTo(dragged.offsetX);
+    expect(afterZoomOut.offsetY).toBeCloseTo(dragged.offsetY);
+  });
+
+  it('拖动后滚轮缩放：offset 保持拖动值，图片视觉中心原地缩放', async () => {
+    const ref = React.createRef<import('../../../../components/shared/MediaViewer/ImageStage').ImageStageActions>();
+    const { container } = render(
+      <ImageStage ref={ref} file={file} viewport={{ width: 1000, height: 800 }} />,
+    );
+    await waitFor(() => {
+      const img = container.querySelector('img');
+      expect(img?.getAttribute('src')).toBeTruthy();
+    });
+    const img = container.querySelector('img')!;
+    Object.defineProperty(img, 'naturalWidth', { value: 500, configurable: true });
+    Object.defineProperty(img, 'naturalHeight', { value: 400, configurable: true });
+    fireEvent.load(img);
+
+    const stage = container.querySelector('[data-testid="image-stage"]') as HTMLElement;
+    await waitFor(() => expect(stage.style.transform).toContain('scale('));
+
+    stage.setPointerCapture = vi.fn();
+    stage.releasePointerCapture = vi.fn();
+    stage.hasPointerCapture = vi.fn(() => true);
+
+    fireEvent.pointerDown(stage, { pointerId: 1, button: 0, clientX: 500, clientY: 400 });
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: 700, clientY: 500 });
+    fireEvent.pointerUp(stage, { pointerId: 1 });
+
+    const dragged = ref.current!.getTransform();
+
+    // 滚轮缩放
+    fireEvent.wheel(stage, { deltaY: -100, clientX: 0, clientY: 0 });
+    await waitFor(() => {
+      const t = ref.current!.getTransform();
+      expect(t.scale).toBeGreaterThan(dragged.scale);
+    });
+    const afterWheel = ref.current!.getTransform();
+    // 关键断言：offset 应保持拖动值（之前 bug 会被清零）
+    expect(afterWheel.offsetX).toBeCloseTo(dragged.offsetX);
+    expect(afterWheel.offsetY).toBeCloseTo(dragged.offsetY);
+  });
+
+  it('拖动后 toggleActualSize：offset 保持拖动值', async () => {
+    const ref = React.createRef<import('../../../../components/shared/MediaViewer/ImageStage').ImageStageActions>();
+    const { container } = render(
+      <ImageStage ref={ref} file={file} viewport={{ width: 1000, height: 800 }} />,
+    );
+    await waitFor(() => {
+      const img = container.querySelector('img');
+      expect(img?.getAttribute('src')).toBeTruthy();
+    });
+    const img = container.querySelector('img')!;
+    Object.defineProperty(img, 'naturalWidth', { value: 500, configurable: true });
+    Object.defineProperty(img, 'naturalHeight', { value: 400, configurable: true });
+    fireEvent.load(img);
+
+    const stage = container.querySelector('[data-testid="image-stage"]') as HTMLElement;
+    await waitFor(() => expect(stage.style.transform).toContain('scale('));
+
+    stage.setPointerCapture = vi.fn();
+    stage.releasePointerCapture = vi.fn();
+    stage.hasPointerCapture = vi.fn(() => true);
+
+    fireEvent.pointerDown(stage, { pointerId: 1, button: 0, clientX: 500, clientY: 400 });
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: 600, clientY: 450 });
+    fireEvent.pointerUp(stage, { pointerId: 1 });
+
+    const dragged = ref.current!.getTransform();
+    expect(Math.abs(dragged.offsetX)).toBeGreaterThan(0.1);
+
+    // fit → 1:1：scale 变，但 offset 保持
+    ref.current?.toggleActualSize();
+    await waitFor(() => expect(stage.style.transform).toContain('scale(1)'));
+    const atActual = ref.current!.getTransform();
+    expect(atActual.offsetX).toBeCloseTo(dragged.offsetX);
+    expect(atActual.offsetY).toBeCloseTo(dragged.offsetY);
+    expect(atActual.scale).toBeCloseTo(1);
+
+    // 1:1 → fit：scale 变回，但 offset 仍然保持
+    ref.current?.toggleActualSize();
+    await waitFor(() => expect(stage.style.transform).not.toContain('scale(1)'));
+    const backToFit = ref.current!.getTransform();
+    expect(backToFit.offsetX).toBeCloseTo(dragged.offsetX);
+    expect(backToFit.offsetY).toBeCloseTo(dragged.offsetY);
+  });
+
+  it('拖动后再旋转：offset 保持当前拖动值，图片中心原地转动', async () => {
+    const ref = React.createRef<import('../../../../components/shared/MediaViewer/ImageStage').ImageStageActions>();
+    const { container } = render(
+      <ImageStage ref={ref} file={file} viewport={{ width: 1000, height: 800 }} />,
+    );
+    await waitFor(() => {
+      const img = container.querySelector('img');
+      expect(img?.getAttribute('src')).toBeTruthy();
+    });
+    const img = container.querySelector('img')!;
+    Object.defineProperty(img, 'naturalWidth', { value: 500, configurable: true });
+    Object.defineProperty(img, 'naturalHeight', { value: 400, configurable: true });
+    fireEvent.load(img);
+
+    const stage = container.querySelector('[data-testid="image-stage"]') as HTMLElement;
+    await waitFor(() => expect(stage.style.transform).toContain('scale('));
+
+    // jsdom 默认不提供 setPointerCapture，必须手动 stub 才能拖动
+    stage.setPointerCapture = vi.fn();
+    stage.releasePointerCapture = vi.fn();
+    stage.hasPointerCapture = vi.fn(() => true);
+
+    // 拖动图片：offsetX/Y 变为非零
+    fireEvent.pointerDown(stage, { pointerId: 1, button: 0, clientX: 500, clientY: 400 });
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: 600, clientY: 450 });
+    fireEvent.pointerUp(stage, { pointerId: 1 });
+
+    const dragged = ref.current!.getTransform();
+    expect(Math.abs(dragged.offsetX)).toBeGreaterThan(0.1);
+    expect(Math.abs(dragged.offsetY)).toBeGreaterThan(0.1);
+
+    // 旋转：offset 保持拖动后的值不变
+    ref.current?.rotateCw();
+    await waitFor(() => expect(stage.dataset.rotation).toBe('90'));
+
+    const rotated = ref.current!.getTransform();
+    expect(rotated.scale).toBeCloseTo(dragged.scale);
+    expect(rotated.rotation).toBe(90);
+    expect(rotated.offsetX).toBeCloseTo(dragged.offsetX);
+    expect(rotated.offsetY).toBeCloseTo(dragged.offsetY);
+  });
+
+  it('拖动图片超出预览框后松开：图片视觉中心弹回 viewport 边界', async () => {
+    const ref = React.createRef<import('../../../../components/shared/MediaViewer/ImageStage').ImageStageActions>();
+    const { container } = render(
+      <ImageStage ref={ref} file={file} viewport={{ width: 1000, height: 800 }} />,
+    );
+    await waitFor(() => {
+      const img = container.querySelector('img');
+      expect(img?.getAttribute('src')).toBeTruthy();
+    });
+    const img = container.querySelector('img')!;
+    Object.defineProperty(img, 'naturalWidth', { value: 500, configurable: true });
+    Object.defineProperty(img, 'naturalHeight', { value: 400, configurable: true });
+    fireEvent.load(img);
+
+    const stage = container.querySelector('[data-testid="image-stage"]') as HTMLElement;
+    await waitFor(() => expect(stage.style.transform).toContain('scale('));
+
+    stage.setPointerCapture = vi.fn();
+    stage.releasePointerCapture = vi.fn();
+    stage.hasPointerCapture = vi.fn(() => true);
+
+    // 从中心点 500,400 向右下角大幅拖动，让图片视觉中心点超出 (viewport.w, viewport.h)
+    fireEvent.pointerDown(stage, { pointerId: 1, button: 0, clientX: 500, clientY: 400 });
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: 3000, clientY: 2500 });
+    fireEvent.pointerUp(stage, { pointerId: 1 });
+
+    // 松开后图片视觉中心应被回弹到 viewport 边界 [0, viewport.w] × [0, viewport.h] 内
+    const fitScale = ref.current!.getTransform().scale; // 重置到 fit（不管图片是否一致，按 fitScale 表达）
+    void fitScale;
+
+    // 通过 css transform 反推 visual center viewport 坐标
+    // transform: translate(tx, ty) scale(s) rotate(deg)
+    // visual center viewport x = tx + natural.w/2 (与 scale/rotate 无关)
+    // visual center viewport y = ty + natural.h/2
+    const css = stage.style.transform;
+    const m = css.match(/translate\(([-\d.]+)px,\s*([-\d.]+)px\)/);
+    expect(m).not.toBeNull();
+    const tx = parseFloat(m![1]);
+    const ty = parseFloat(m![2]);
+    const effW = img.naturalWidth || 500;
+    const effH = img.naturalHeight || 400;
+    const centerX = tx + effW / 2;
+    const centerY = ty + effH / 2;
+
+    // 视觉中心点位于 [0, viewport.w] × [0, viewport.h] 内
+    expect(centerX).toBeGreaterThanOrEqual(0);
+    expect(centerX).toBeLessThanOrEqual(1000);
+    expect(centerY).toBeGreaterThanOrEqual(0);
+    expect(centerY).toBeLessThanOrEqual(800);
+  });
+
+  it('wheel 在 stageWrap 任意位置都能触发缩放，不只在图片范围内', async () => {
+    const ref = React.createRef<import('../../../../components/shared/MediaViewer/ImageStage').ImageStageActions>();
+    const { container } = render(
+      <ImageStage ref={ref} file={file} viewport={{ width: 1000, height: 800 }} />,
+    );
+    await waitFor(() => {
+      const img = container.querySelector('img');
+      expect(img?.getAttribute('src')).toBeTruthy();
+    });
+    const img = container.querySelector('img')!;
+    Object.defineProperty(img, 'naturalWidth', { value: 500, configurable: true });
+    Object.defineProperty(img, 'naturalHeight', { value: 400, configurable: true });
+    fireEvent.load(img);
+
+    const stage = container.querySelector('[data-testid="image-stage"]') as HTMLElement;
+    await waitFor(() => expect(stage.style.transform).toContain('scale('));
+
+    // 在 stageWrap（container 元素）而不是 stage 上 wheel，模拟在预览框空白处滚轮
+    const wrap = stage.parentElement as HTMLElement;
+    expect(wrap).toBeTruthy();
+    const before = stage.style.transform;
+    fireEvent.wheel(wrap, { deltaY: -100, clientX: 50, clientY: 50 });
+    await waitFor(() => expect(stage.style.transform).not.toBe(before));
   });
 });

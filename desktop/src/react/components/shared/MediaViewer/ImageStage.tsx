@@ -24,6 +24,8 @@ export interface ImageStageActions {
   reset: () => void;
   rotateCw: () => void;
   toggleActualSize: () => void;
+  zoomIn: () => void;
+  zoomOut: () => void;
   getTransform: () => import('./use-media-transform').Transform;
 }
 
@@ -107,6 +109,7 @@ export const ImageStage = forwardRef<ImageStageActions, Props>(function ImageSta
 
   const {
     cssTransform,
+    cssTransition,
     onWheel,
     onPointerDown,
     onPointerMove,
@@ -122,6 +125,8 @@ export const ImageStage = forwardRef<ImageStageActions, Props>(function ImageSta
     reset: () => transformApi.reset(),
     rotateCw: () => transformApi.rotateCw(),
     toggleActualSize: () => transformApi.toggleActualSize(),
+    zoomIn: () => transformApi.zoomIn(),
+    zoomOut: () => transformApi.zoomOut(),
     /** 只读快照，供顶层/测试调试。 */
     getTransform: () => transformApi.transform,
   }), [transformApi]);
@@ -140,11 +145,15 @@ export const ImageStage = forwardRef<ImageStageActions, Props>(function ImageSta
     onTransformChange?.(transform.scale);
   }, [transform.scale, onTransformChange]);
 
-  // 用 native wheel 事件（passive: false），以使 onWheel 内的 e.preventDefault() 生效。
+  // 用 native wheel 事件（passive: false）挂在 stageWrap（= stage 的父元素，即整个预览框），
+  // 这样在预览框的任意位置滚动都能缩放，而不是只在图片可视矩形内才响应。
+  // useLayoutEffect 保证 listener 在 commit 后同步挂上，避免 useEffect 异步调度窗口期里事件丢失。
   // React 合成 wheel 默认是 passive，会报 'Unable to preventDefault inside passive event listener'。
-  useEffect(() => {
+  useLayoutEffect(() => {
     const stage = stageRef.current;
     if (!stage) return;
+    const wrap = stage.parentElement;
+    if (!wrap) return;
     const handler: EventListener = (e) => {
       const wheel = e as WheelEvent;
       onWheel({
@@ -157,8 +166,8 @@ export const ImageStage = forwardRef<ImageStageActions, Props>(function ImageSta
         preventDefault: () => wheel.preventDefault(),
       } as unknown as React.WheelEvent<HTMLElement>);
     };
-    stage.addEventListener('wheel', handler, { passive: false });
-    return () => stage.removeEventListener('wheel', handler);
+    wrap.addEventListener('wheel', handler, { passive: false });
+    return () => wrap.removeEventListener('wheel', handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onWheel]);
 
@@ -179,13 +188,13 @@ export const ImageStage = forwardRef<ImageStageActions, Props>(function ImageSta
 
   return (
     <div
+      ref={stageRef}
       className={styles.stage}
       data-testid="image-stage"
       data-zoom-in-seq={zoomCmd?.in ?? 0}
       data-zoom-out-seq={zoomCmd?.out ?? 0}
       data-reset-seq={zoomCmd?.reset ?? 0}
       data-rotation={transform.rotation}
-      onWheel={onWheel}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -193,17 +202,30 @@ export const ImageStage = forwardRef<ImageStageActions, Props>(function ImageSta
       onDoubleClick={onDoubleClick}
       style={{
         transform: cssTransform,
+        // 仅在拖动结束的回弹动作上启用 transition；拖动期间 / 缩放 / 旋转始终保持瞬时响应，
+        // 否则拖动第一帧会感觉被 transition 拖慢。
+        transition: cssTransition,
         cursor: cursorStyle,
         // 旋转绕图片中心而非 transform-origin 默认的左上角，否则放大后旋转会跳位。
         transformOrigin: 'center center',
       }}
     >
-      {!src && <div className={styles.spinner} data-testid="image-stage-spinner" />}
+      {!natural && (
+        // 在 natural 还没拿到之前显示 spinner（不论 src 是否设上）。
+        // 原因：natural=null 时 cssTransform 给的是 `translate(viewport.w/2, viewport.h/2)` 占位，
+        // 但 src 设上后 img 已被浏览器按真实自然尺寸排版，transform-origin = center center = (nw/2, nh/2)，
+        // 导致元素中心被推到“viewport 中心 + 图片自然尺寸的一半”——右下角偏移出去。
+        // 一旦 onLoad 拿到 natural 赋了 cssTransform 正确公式，元素中心再跳回 viewport 中心。
+        // 这中间 layout 突变会被肉眼识别为“图片从右下角快速移动到中心”。
+        // 修复：img 加 visibility 切换，natural 未就位时 hidden；spinner 占位到 natural 就位。
+        <div className={styles.spinner} data-testid="image-stage-spinner" />
+      )}
       {src && (
         <img
           ref={imgElRef}
           src={src}
           alt={file.name}
+          style={{ visibility: natural ? 'visible' : 'hidden' }}
           onLoad={(e) => {
             const el = e.currentTarget;
             setNatural({ w: el.naturalWidth, h: el.naturalHeight });

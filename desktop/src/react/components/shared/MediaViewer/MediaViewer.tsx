@@ -33,7 +33,7 @@ export function MediaViewer() {
   // 只关心 open/close 切换，不关心 state 内容变化，提成布尔以满足 exhaustive-deps
   const isOpen = !!state;
 
-  // 尺寸追踪：用 stageWrap 实际尺寸（不是 window），避免顶栏 / captionBar 占用上下空间后
+  // 尺寸追踪：用 stageWrap 实际尺寸（不是 window），避免顶栏占用上下空间后
   // fit scale 算出“图片超出可视区”的结果。
   useEffect(() => {
     if (!isOpen) return;
@@ -159,13 +159,18 @@ export function MediaViewer() {
       animate={{ opacity: 1 }}
       transition={spring.paperSnap}
     >
-      {/* 顶栏 */}
+      {/* 顶栏：左侧文件名 + 序号，右侧操作按钮 */}
       <div className={`${styles.topbar} ${chromeVisible ? '' : styles.hidden}`}>
-        {multi && (
-          <span className={styles.index} data-testid="media-viewer-index">
-            {currentIndex + 1} / {state.files.length}
+        <div className={styles.topbarInfo} data-testid="media-viewer-topbar-info">
+          {multi && (
+            <span className={styles.index} data-testid="media-viewer-index">
+              {currentIndex + 1} / {state.files.length}
+            </span>
+          )}
+          <span className={styles.topbarName} data-testid="media-viewer-name" title={current.name}>
+            {current.name}
           </span>
-        )}
+        </div>
         <div className={styles.topbarActions}>
           {current.kind !== 'video' && (
             <>
@@ -237,13 +242,6 @@ export function MediaViewer() {
             key={`${current.id}:${fileRefVersionToken(current) || ''}`}
           />
         )}
-      </div>
-
-      <div
-        className={`${styles.captionBar} ${chromeVisible ? '' : styles.hidden}`}
-        data-testid="media-viewer-caption"
-      >
-        <span className={styles.name} data-testid="media-viewer-name">{current.name}</span>
       </div>
     </motion.div>
   );

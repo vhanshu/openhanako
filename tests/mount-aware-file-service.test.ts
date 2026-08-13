@@ -200,4 +200,40 @@ describe("MountAwareFileService", () => {
       }),
     );
   });
+
+  it("listFiles 不再过滤点前缀文件（.gitignore / .npmrc 等仓库元文件可见）", async () => {
+    const { MountAwareFileService } = await import("../core/mount-aware-file-service.ts");
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "hana-mount-dotfile-"));
+    fs.writeFileSync(path.join(tmpDir, "README.md"), "# readme", "utf-8");
+    fs.writeFileSync(path.join(tmpDir, ".gitignore"), "node_modules\n", "utf-8");
+    fs.writeFileSync(path.join(tmpDir, ".gitattributes"), "* text=auto\n", "utf-8");
+    fs.writeFileSync(path.join(tmpDir, ".npmrc"), "save-exact=true\n", "utf-8");
+
+    const service = new MountAwareFileService({
+      hanakoHome: tmpDir,
+      defaultRoot: tmpDir,
+      studioId: null,
+      resourceIO: {
+        list: vi.fn(async ({ ref }) => {
+          const entries = fs.readdirSync(ref.path, { withFileTypes: true });
+          return {
+            items: entries.map((e) => ({
+              name: e.name,
+              isDirectory: e.isDirectory(),
+              size: e.isFile() ? fs.statSync(path.join(ref.path, e.name)).size : null,
+              mtimeMs: fs.statSync(path.join(ref.path, e.name)).mtimeMs,
+            })),
+          };
+        }),
+      },
+    });
+
+    const result = await service.listFiles("default", "");
+
+    const names = result.files.map((f) => f.name).sort();
+    expect(names).toContain(".gitignore");
+    expect(names).toContain(".gitattributes");
+    expect(names).toContain(".npmrc");
+    expect(names).toContain("README.md");
+  });
 });

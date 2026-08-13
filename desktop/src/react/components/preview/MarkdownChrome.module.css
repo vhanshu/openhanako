@@ -131,10 +131,15 @@
 
 :global(.preview-find-mark) {
     border-radius: 2px;
-    background: color-mix(in srgb, var(--accent) 28%, transparent);
-    color: inherit;
+    /* 单纯用 var(--accent) 不管用：冷色 accent 跟 cream 背景一混就剩微迹。
+     * 强行用高饱和暖色当高亮底，文字色压深才能跳出。 */
+    background: #fde047;
+    color: #1f2937;
+    padding: 0 1px;
 }
 
 :global(.preview-find-mark-active) {
-    background: color-mix(in srgb, var(--accent) 52%, transparent);
+    background: #facc15;
+    color: #111827;
+    box-shadow: 0 0 0 1px #ca8a04;
 }

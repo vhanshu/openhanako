@@ -13,6 +13,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { undo, redo } from '@codemirror/commands';
+import {
+  syntaxTree, foldNodeProp, foldEffect, unfoldEffect, foldedRanges,
+} from '@codemirror/language';
 import { useStore } from '../../stores';
 import type { EditorView } from '@codemirror/view';
 import type {
@@ -275,6 +278,43 @@ export function EditorContextMenu({
     if (view) { redo(view); view.focus(); }
   }, [getView]);
 
+  // 折叠 / 展开仅作用于当前选区；无选区时菜单项置灰。
+  // 折叠：遍历选区范围内的语法树节点，凡是 lang 包注册的 foldNodeProp
+  // 都打包成 foldEffect 一次性 dispatch；展开：从 foldedRanges 里筛出
+  // 落在选区内的 fold，dispatch 对应的 unfoldEffect。
+  const handleFoldSelection = useCallback(() => {
+    const view = getView();
+    if (!view) return;
+    const { from, to } = view.state.selection.main;
+    if (from >= to) return;
+    const tree = syntaxTree(view.state);
+    const targets: { from: number; to: number }[] = [];
+    tree.cursor().iterate(({ node, from: f, to: t }) => {
+      if (f >= from && t <= to && node.type.prop(foldNodeProp)) {
+        targets.push({ from: f, to: t });
+      }
+    });
+    if (targets.length > 0) {
+      view.dispatch({ effects: targets.map((r) => foldEffect.of(r)) });
+    }
+    view.focus();
+  }, [getView]);
+
+  const handleUnfoldSelection = useCallback(() => {
+    const view = getView();
+    if (!view) return;
+    const { from, to } = view.state.selection.main;
+    if (from >= to) return;
+    const targets: { from: number; to: number }[] = [];
+    foldedRanges(view.state).between(from, to, (f, t) => {
+      targets.push({ from: f, to: t });
+    });
+    if (targets.length > 0) {
+      view.dispatch({ effects: targets.map((r) => unfoldEffect.of(r)) });
+    }
+    view.focus();
+  }, [getView]);
+
   if (!menu) return null;
 
   const isMac = navigator.platform?.startsWith('Mac') || navigator.userAgent?.includes('Mac');
@@ -323,6 +363,16 @@ export function EditorContextMenu({
         label={label('ctx.selectAll', '全选')}
         shortcut={`${mod}A`}
         onClick={() => { close(); void runEditCommand('selectAll'); }}
+      />
+      <MenuItem
+        label={label('ctx.foldSelection', '折叠选区')}
+        disabled={!menu.hasSelection}
+        onClick={() => { close(); handleFoldSelection(); }}
+      />
+      <MenuItem
+        label={label('ctx.unfoldSelection', '展开选区')}
+        disabled={!menu.hasSelection}
+        onClick={() => { close(); handleUnfoldSelection(); }}
       />
       {!readOnly && (
         <>

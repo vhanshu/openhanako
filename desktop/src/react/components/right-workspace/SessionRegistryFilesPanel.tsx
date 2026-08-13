@@ -231,7 +231,7 @@ function SortIcon() {
   );
 }
 
-function ExpiredBadgeIcon() {
+function ExpiredBadgeIcon({ title }: { title: string }) {
   // 红色三角警告：贴在文件图标右下角，表示本机文件不可访问（expired / missing）。
   // 比 status label 更显眼，即使不 hover 也能一眼看到。
   return (
@@ -243,6 +243,7 @@ function ExpiredBadgeIcon() {
       fill="currentColor"
       aria-hidden="true"
     >
+      <title>{title}</title>
       <path d="M12 2L1 21h22L12 2zm0 4.5L19.5 19h-15L12 6.5zM11 11v4h2v-4h-2zm0 6v2h2v-2h-2z" />
     </svg>
   );
@@ -345,7 +346,7 @@ function SessionFileRow({
     >
       <div className={styles.fileIcon} aria-hidden="true">
         <FileKindIcon kind={file.kind} size={16} />
-        {isExpired(file) && <ExpiredBadgeIcon />}
+        {isExpired(file) && <ExpiredBadgeIcon title={tr('rightWorkspace.sessionFiles.expiredTooltip')} />}
       </div>
       <div className={styles.fileMain}>
         <div className={styles.fileName} data-testid="session-file-name" title={isExpired(file) ? tr('rightWorkspace.sessionFiles.expiredTooltip') : file.name}>{file.name}</div>
@@ -393,17 +394,19 @@ function SessionFileRow({
             </button>
           </>
         )}
-        {downloadUrl && (
+        {/* 下载按钮始终渲染（可下载或文件已过期）：expired 时置灰不可点，
+         * 让用户看到“除复制路径外的功能都不可用”。纯本地文件无 downloadUrl 时隐藏。 */}
+        {(downloadUrl || isExpired(file)) && (
           <a
-            className={`${styles.fileAction}${isExpired(file) ? ` ${styles.fileActionDisabled}` : ''}`}
+            className={`${styles.fileAction}${!downloadUrl ? ` ${styles.fileActionDisabled}` : ''}`}
             data-session-file-action=""
             aria-label={actionLabel('rightWorkspace.sessionFiles.actions.downloadToDevice', file)}
             title={actionLabel('rightWorkspace.sessionFiles.actions.downloadToDevice', file)}
-            aria-disabled={isExpired(file) || undefined}
-            href={isExpired(file) ? undefined : downloadUrl}
+            aria-disabled={!downloadUrl || undefined}
+            href={downloadUrl ?? undefined}
             download={file.name}
             onClick={(event) => {
-              if (isExpired(file)) {
+              if (!downloadUrl) {
                 event.preventDefault();
                 event.stopPropagation();
                 return;
@@ -442,6 +445,45 @@ export function SessionRegistryFilesPanel() {
   ));
   const [sortMode, setSortMode] = useState<SessionFileSortMode>(getInitialSortMode);
   const sortedFiles = useMemo(() => sortSessionFiles(files, sortMode), [files, sortMode]);
+
+  /**
+   * 本地文件存在性检查。registry 里的 status 只在注册时标 available，文件之后被
+   * 删除/重命名没有任何事件会更新它；这里在渲染层主动 stat（pathExists IPC），
+   * 不存在的文件记入 expiredOverrides，让行渲染/右键菜单/动作守卫一致地置灰。
+   * pathExists API 不可用（web / 测试）时跳过，不阻塞原有行为。
+   */
+  const [expiredOverrides, setExpiredOverrides] = useState<Set<string>>(() => new Set());
+  useEffect(() => {
+    const check = window.platform?.pathExists;
+    const candidates = files.filter(f => f.path && f.status !== 'expired' && typeof check === 'function');
+    if (candidates.length === 0) {
+      setExpiredOverrides(new Set());
+      return;
+    }
+    let cancelled = false;
+    void Promise.all(candidates.map(async (f) => {
+      try {
+        const exists = !!(await check!(f.path!));
+        return { id: f.id, missing: !exists };
+      } catch {
+        return { id: f.id, missing: false };
+      }
+    })).then(results => {
+      if (cancelled) return;
+      setExpiredOverrides(new Set(results.filter(r => r.missing).map(r => r.id)));
+    });
+    return () => { cancelled = true; };
+  }, [files]);
+
+  /** 把存在性检查结果合进 FileRef：status 置 expired 后，isExpired / canPreview / canUsePath / canDrag 全部自动生效。 */
+  const visibleFiles = useMemo(
+    () => sortedFiles.map(file => (
+      expiredOverrides.has(file.id) && file.status !== 'expired'
+        ? { ...file, status: 'expired' as const, missingAt: file.missingAt ?? Date.now() }
+        : file
+    )),
+    [sortedFiles, expiredOverrides],
+  );
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const selectedIdsRef = useRef(selectedIds);
   selectedIdsRef.current = selectedIds;
@@ -490,8 +532,8 @@ export function SessionRegistryFilesPanel() {
   useEffect(() => () => cleanupRef.current?.(), []);
 
   const selectedFiles = useMemo(
-    () => sortedFiles.filter(file => selectedIds.has(file.id)),
-    [sortedFiles, selectedIds],
+    () => visibleFiles.filter(file => selectedIds.has(file.id)),
+    [visibleFiles, selectedIds],
   );
 
   const loadBridgeTargets = useCallback(async (force = false) => {
@@ -603,11 +645,11 @@ export function SessionRegistryFilesPanel() {
 
   const filesForAction = useCallback((file: FileRef): FileRef[] => {
     if (selectedIdsRef.current.has(file.id)) {
-      const selected = sortedFiles.filter(item => selectedIdsRef.current.has(item.id));
+      const selected = visibleFiles.filter(item => selectedIdsRef.current.has(item.id));
       return selected.length > 0 ? selected : [file];
     }
     return [file];
-  }, [sortedFiles]);
+  }, [visibleFiles]);
 
   const handleSortClick = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
@@ -842,7 +884,7 @@ export function SessionRegistryFilesPanel() {
             onPaste={suppressImport}
             onDrop={suppressImport}
           >
-            {sortedFiles.map(file => (
+            {visibleFiles.map(file => (
               <SessionFileRow
                 key={file.id}
                 file={file}
